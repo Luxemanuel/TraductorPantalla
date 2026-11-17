@@ -35,7 +35,7 @@ def carpeta_modelos_voz():
 # Segmentador: corta el audio en frases usando el detector de voz Silero
 # ============================================================================
 class Segmentador:
-    def __init__(self, silencio_fin=0.35, max_frase=7.0, ventana=4.0):
+    def __init__(self, silencio_fin=0.55, max_frase=7.0, ventana=4.0):
         from faster_whisper.vad import VadOptions
         self.opciones = VadOptions(threshold=0.5, min_silence_duration_ms=200, speech_pad_ms=120,
                                    min_speech_duration_ms=200)
@@ -48,7 +48,7 @@ class Segmentador:
         self.ultimo_fin = 0                           # fin de la última frase entregada
 
     def agregar(self, trozo):
-        """Recibe audio mono 16 kHz. Devuelve una lista de frases (arrays) terminadas."""
+        """Recibe audio mono 16 kHz. Devuelve [(frase, segundos de silencio antes de ella)]."""
         from faster_whisper.vad import get_speech_timestamps
         self.audio = np.concatenate([self.audio, trozo.astype(np.float32)])
         fin_abs = self.inicio_buf + len(self.audio)
@@ -72,7 +72,8 @@ class Segmentador:
                 fin_voz = max(fin_voz, self.inicio_voz)
                 frase = self._recortar(self.inicio_voz, fin_voz)
                 if len(frase) > 0.3 * SR:
-                    frases.append(frase)
+                    hueco = (self.inicio_voz - self.ultimo_fin) / SR if self.ultimo_fin else 99.0
+                    frases.append((frase, hueco))
                 self.ultimo_fin = fin_voz
                 self.inicio_voz = fin_abs if hablando_ahora else None
         # no guardar más audio del necesario
@@ -88,8 +89,9 @@ class Segmentador:
         if self.inicio_voz is None:
             return []
         frase = self._recortar(self.inicio_voz, self.inicio_buf + len(self.audio))
+        hueco = (self.inicio_voz - self.ultimo_fin) / SR if self.ultimo_fin else 99.0
         self.inicio_voz = None
-        return [frase] if len(frase) > 0.3 * SR else []
+        return [(frase, hueco)] if len(frase) > 0.3 * SR else []
 
     def _recortar(self, a, b):
         return self.audio[max(0, a - self.inicio_buf): max(0, b - self.inicio_buf)].copy()
@@ -166,13 +168,13 @@ class SubtitulosDeVoz:
                 while self.activo:
                     datos = rec.record(numframes=n)
                     mono = datos[:, 0] if datos.ndim == 2 else datos
-                    for frase in seg.agregar(mono):
+                    for frase, hueco in seg.agregar(mono):
                         if self.frases.qsize() > 2:      # ir siempre al día: descartar lo atrasado
                             try:
                                 self.frases.get_nowait()
                             except queue.Empty:
                                 pass
-                        self.frases.put((frase, time.time()))
+                        self.frases.put((frase, time.time(), hueco))
         except Exception as e:
             log.exception("Grabando el audio del sistema")
             self._avisar(f"Se cortó la captura de audio: {e}")
@@ -190,12 +192,12 @@ class SubtitulosDeVoz:
         threading.Thread(target=self._capturar_bucle, daemon=True, name="voz-audio").start()
         while self.activo:
             try:
-                frase, t_fin = self.frases.get(timeout=0.3)
+                frase, t_fin, hueco = self.frases.get(timeout=0.3)
             except queue.Empty:
                 continue
-            self.procesar_frase(frase, t_fin)
+            self.procesar_frase(frase, t_fin, hueco)
 
-    def procesar_frase(self, frase, t_fin=None):
+    def procesar_frase(self, frase, t_fin=None, hueco=99.0):
         idioma_cfg = self.app.cfg.get("idioma_origen", "auto")
         try:
             texto, idioma = self._transcriptor.transcribir(frase, None if idioma_cfg == "auto" else idioma_cfg)
@@ -204,13 +206,14 @@ class SubtitulosDeVoz:
             return None
         if not texto or idioma not in ("en", "ja"):
             return None
-        # Si la frase anterior quedó a medias (pausa en una coma) y esta llega enseguida,
-        # se muestran juntas para que la traducción tenga sentido completo.
+        # Si esta frase empezó casi pegada a la anterior (pausa corta, p. ej. una coma),
+        # es la misma oración: se muestran juntas para que la traducción tenga sentido.
         ahora = time.time()
         p = self._previo
-        if (p and p[1] == idioma and ahora - p[2] < 2.5
-                and not p[0].rstrip().endswith((".", "!", "?", "。", "！", "？", "…"))):
-            texto = p[0] + ("" if idioma == "ja" else " ") + texto
+        reemplaza = None
+        if p and p[1] == idioma and hueco < 0.8 and len(p[0].split()) < 30:
+            reemplaza = p[0]
+            texto = p[0].rstrip(".。") + ("" if idioma == "ja" else " ") + texto
         self._previo = (texto, idioma, ahora)
         destino = self.app.cfg.get("idioma_destino", "es")
         try:
@@ -219,7 +222,8 @@ class SubtitulosDeVoz:
             log.exception("Traduciendo voz")
             trad = None
         demora = time.time() - t_fin if t_fin else 0.0
-        resultado = {"original": texto, "traduccion": trad or texto, "idioma": idioma, "demora": demora}
+        resultado = {"original": texto, "traduccion": trad or texto, "idioma": idioma, "demora": demora,
+                     "reemplaza": reemplaza}
         self.app.cola.put(("voz", (self, resultado)))
         return resultado
 

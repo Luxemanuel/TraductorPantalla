@@ -510,6 +510,8 @@ class App:
             self.barra_voz.mostrar(r["traduccion"], r["original"])
         bloque = {"caja": None, "original": r["original"], "traduccion": r["traduccion"], "idioma": r["idioma"]}
         self.ultimos_bloques = [bloque]
+        if r.get("reemplaza"):
+            self.historial.quitar_original(r["reemplaza"])
         self.historial.agregar([bloque], "voz")
         self.estado(f"● Subtítulos de voz ({'inglés' if r['idioma'] == 'en' else 'japonés'}): "
                     f"apareció {r['demora']:.1f} s después de terminar la frase.")
@@ -1031,16 +1033,20 @@ def autoprueba_voz(m, cfg, lineas):
     audio = np.concatenate([silencio, audio, silencio])
     seg, n, resultados = sv.Segmentador(), int(sv.PASO * sv.SR), []
     for i in range(0, len(audio), n):
-        for frase in seg.agregar(audio[i:i + n]):
-            resultados.append(servicio.procesar_frase(frase, time.time()))
-    for frase in seg.terminar():
-        resultados.append(servicio.procesar_frase(frase, time.time()))
+        for frase, hueco in seg.agregar(audio[i:i + n]):
+            resultados.append(servicio.procesar_frase(frase, time.time(), hueco))
+    for frase, hueco in seg.terminar():
+        resultados.append(servicio.procesar_frase(frase, time.time(), hueco))
     for r in resultados:
         if r:
             lineas.append(f"  VOZ [{r['idioma']}] {r['original']}  =>  {r['traduccion']}  "
                           f"(listo {r['demora']:.2f} s después de terminar la frase)")
-    texto = " ".join(r["original"].lower() for r in resultados if r)
-    ok = "village" in texto and "forest" in texto
+    finales = [r for r in resultados if r]
+    reemplazados = {r["reemplaza"] for r in finales if r.get("reemplaza")}
+    finales = [r for r in finales if r["original"] not in reemplazados]
+    lineas.append(f"VOZ: subtítulos finales: {[r['traduccion'] for r in finales]}")
+    texto = " ".join(r["original"].lower() for r in finales)
+    ok = "village" in texto and "forest" in texto and texto.count("village") == 1
     lineas.append(f"VOZ: {'OK' if ok else 'FALLO'}")
     return ok
 

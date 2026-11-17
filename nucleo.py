@@ -220,6 +220,13 @@ class Historial:
         self.entradas = (nuevas + self.entradas)[: max(10, int(self.cfg.get("historial_max", 300)))]
         self._cambio()
 
+    def quitar_original(self, original):
+        """Quita una frase (p. ej. un subtítulo que luego se completó)."""
+        antes = len(self.entradas)
+        self.entradas = [e for e in self.entradas if e["original"] != original]
+        if len(self.entradas) != antes:
+            self._cambio()
+
     def borrar(self, indices):
         quitar = set(indices)
         self.entradas = [e for i, e in enumerate(self.entradas) if i not in quitar]
