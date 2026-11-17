@@ -49,7 +49,7 @@ jobs:
             --name "Traductor de Pantalla" --icon icono.ico `
             --collect-all easyocr --collect-all argostranslate --collect-all ctranslate2 `
             --collect-all sentencepiece --collect-all stanza --collect-all minisbd `
-            --collect-data skimage `
+            --collect-all torchvision --collect-data skimage `
             --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
             @extra traductor_pantalla.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
