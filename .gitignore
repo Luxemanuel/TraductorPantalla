@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+build/
+dist/
+modelos/
+config.json
+historial.json
+registro.txt
+autoprueba.txt
+icono.ico
+*.spec
+*.zip

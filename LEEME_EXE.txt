@@ -1,0 +1,31 @@
+TRADUCTOR DE PANTALLA  ·  Inglés / Japonés -> Español   (versión .exe)
+=====================================================================
+
+CÓMO ABRIRLO
+  Doble clic en "Traductor de Pantalla.exe".
+  No necesita Python ni internet: los modelos van en la carpeta "modelos".
+  No separes el .exe de su carpeta (necesita los archivos que lo acompañan).
+  Para tenerlo a mano: clic derecho en el .exe > Enviar a > Escritorio
+  (crear acceso directo).
+
+  Si Windows muestra "Windows protegió su PC": Más información >
+  Ejecutar de todas formas (sale porque el programa no tiene firma digital).
+
+ATAJOS (funcionan en cualquier programa o juego)
+  Ctrl+Alt+T  traducir la pantalla completa
+  Ctrl+Alt+Z  elegir una zona con el ratón y traducirla
+  Ctrl+Alt+R  repetir la última zona (subtítulos, diálogos)
+  Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
+  Ctrl+Alt+X  detener / cerrar la traducción / callar la voz
+
+DENTRO DE LA TRADUCCIÓN
+  Esc o clic = cerrar · Espacio = ver original · C = copiar
+  L = leer en voz alta · P = ver como texto · H = ocultar la barra
+
+Inglés y japonés mezclados se traducen a la vez con "Detectar solo".
+En la ventana principal tienes Historial, Mi glosario, Configuración
+(colores, alto contraste, letra, atajos, voz…) y Ayuda (F1).
+
+Tus ajustes, glosario e historial se guardan en esta misma carpeta
+(config.json, glosario.json, historial.json). Si algo falla, el archivo
+registro.txt guarda los detalles del error.

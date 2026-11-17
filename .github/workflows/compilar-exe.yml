@@ -1,0 +1,100 @@
+name: Fabricar .exe de Windows
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # para publicar la descarga en "Releases"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      ARGOS_PACKAGES_DIR: ${{ github.workspace }}\modelos\argos
+      EASYOCR_MODULE_PATH: ${{ github.workspace }}\modelos\easyocr
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar librerías
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -c versiones_exe.txt
+          pip install pyinstaller
+
+      - name: Descargar modelos (OCR + idiomas) dentro de la carpeta "modelos"
+        run: python descargar_idiomas.py
+
+      - name: Crear icono
+        run: python crear_icono.py
+
+      - name: Compilar con PyInstaller
+        run: >
+          pyinstaller --noconfirm --windowed
+          --name "Traductor de Pantalla" --icon icono.ico
+          --collect-all easyocr --collect-all argostranslate --collect-all ctranslate2
+          --collect-all sentencepiece --collect-all stanza --collect-all minisbd
+          --collect-data skimage
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          traductor_pantalla.py
+
+      - name: Copiar modelos, glosario e instrucciones
+        shell: pwsh
+        run: |
+          $d = "dist\Traductor de Pantalla"
+          Copy-Item -Recurse modelos "$d\modelos"
+          Copy-Item glosario.json "$d\glosario.json"
+          Copy-Item LEEME_EXE.txt "$d\LEEME.txt"
+
+      - name: Autoprueba (leer y traducir una imagen con el .exe)
+        shell: pwsh
+        env:
+          ARGOS_PACKAGES_DIR: ""
+          EASYOCR_MODULE_PATH: ""
+        run: |
+          $d = "dist\Traductor de Pantalla"
+          $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -ArgumentList "--autoprueba" -Wait -PassThru
+          Get-Content "$d\autoprueba.txt" -Encoding UTF8
+          if (Test-Path "$d\registro.txt") { Get-Content "$d\registro.txt" -Tail 40 -Encoding UTF8 }
+          if ($p.ExitCode -ne 0) { Write-Error "La autoprueba falló"; exit 1 }
+          Remove-Item "$d\autoprueba.txt", "$d\registro.txt" -ErrorAction SilentlyContinue
+
+      - name: Prueba de arranque (abrir la ventana 90 s)
+        shell: pwsh
+        env:
+          ARGOS_PACKAGES_DIR: ""
+          EASYOCR_MODULE_PATH: ""
+        run: |
+          $d = "dist\Traductor de Pantalla"
+          $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -PassThru
+          Start-Sleep -Seconds 90
+          $vivo = -not $p.HasExited
+          if ($vivo) { Stop-Process -Id $p.Id -Force }
+          if (Test-Path "$d\registro.txt") { Get-Content "$d\registro.txt" -Tail 40 -Encoding UTF8 }
+          Remove-Item "$d\registro.txt", "$d\config.json" -ErrorAction SilentlyContinue
+          if (-not $vivo) { Write-Error "El programa se cerró solo al arrancar"; exit 1 }
+
+      - name: Comprimir
+        shell: pwsh
+        run: 7z a -tzip -mx=5 TraductorPantalla-Windows.zip "dist\Traductor de Pantalla"
+
+      - name: Guardar como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: TraductorPantalla-Windows
+          path: TraductorPantalla-Windows.zip
+          compression-level: 0
+
+      - name: Publicar en Releases (descarga directa)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v3-build${{ github.run_number }}"
+          gh release create $tag TraductorPantalla-Windows.zip --title "Traductor de Pantalla (Windows) - compilación ${{ github.run_number }}" --notes "Descarga TraductorPantalla-Windows.zip, descomprímelo y abre 'Traductor de Pantalla.exe'. No necesita Python ni internet."

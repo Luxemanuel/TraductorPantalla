@@ -1,0 +1,114 @@
+TRADUCTOR DE PANTALLA  ·  Inglés / Japonés -> Español        (versión 3)
+=========================================================================
+
+QUÉ HACE
+  Lee el texto que hay en tu pantalla y pone la traducción al español
+  encima de las palabras (recuadros semitransparentes) o en un panel de
+  texto. Funciona SIN internet después de la primera instalación.
+
+ANTES DE EMPEZAR (una sola vez)
+  Instala Python 3.12 desde https://www.python.org/downloads/
+  En Windows marca la casilla "Add Python to PATH" durante la instalación.
+
+CÓMO ABRIRLO
+  Windows ....... doble clic en  INICIAR_Windows.bat
+                  (al terminar la instalación crea un acceso directo
+                   "Traductor de Pantalla" en tu Escritorio)
+  Mac / Linux ... en la terminal:  bash iniciar_mac_linux.sh
+
+  La primera vez descarga el programa y los idiomas (1-2 GB, 5-15 min) y
+  al final traduce dos frases de prueba para confirmar que todo funciona.
+
+VENTANA PRINCIPAL
+  · Traducir pantalla completa ...... Ctrl+Alt+T
+  · Traducir una zona ............... Ctrl+Alt+Z  (más rápido y preciso)
+  · Repetir la última zona .......... Ctrl+Alt+R  (ideal para subtítulos
+                                                    y diálogos de juegos)
+  · Traducir lo copiado ............. Ctrl+Alt+V  (copia un texto con
+                                       Ctrl+C en cualquier sitio y lo
+                                       traduce sin leer la pantalla: es
+                                       instantáneo y sin errores de lectura)
+  · Detener ......................... Ctrl+Alt+X  (cancela lo que esté
+                                       haciendo, cierra la traducción y
+                                       calla la voz)
+  · Idioma de origen: Detectar solo / Inglés / Japonés
+  · Mostrar: Sobre las palabras / En panel de texto
+  · Historial · Mi glosario · Configuración · Ayuda (F1) · Salir
+  Los atajos funcionan aunque estés en otro programa o en un juego.
+
+INGLÉS Y JAPONÉS A LA VEZ
+  Con "Detectar solo" (la opción por defecto) cada frase se clasifica por
+  separado: si en la pantalla o en lo copiado hay inglés y japonés
+  mezclados, se traducen los dos de una vez, sin cambiar nada. Elegir
+  "Inglés" o "Japonés" solo sirve para ignorar el otro idioma.
+
+HISTORIAL
+  Guarda todo lo que traduces (lo más reciente arriba; si una frase se
+  repite no se duplica, sube al principio). Puedes:
+  · buscar por palabra y filtrar por idioma
+  · copiar la traducción o el original (también varias a la vez)
+  · leer en voz alta, corregir en el glosario
+  · borrar frases sueltas o vaciarlo, y exportarlo a un archivo .txt
+  Se guarda en historial.json (solo en tu equipo). En Configuración >
+  General puedes desactivar que se guarde al cerrar y elegir el máximo
+  de frases (300 por defecto).
+
+DENTRO DE LA TRADUCCIÓN (sobre las palabras)
+  Esc o clic ... cerrar            Espacio ... ver original / traducción
+  C ............ copiar texto      L ......... leer en voz alta
+  P ............ ver como texto    H ......... ocultar la barra de botones
+
+PANEL DE TEXTO
+  Letra grande y cómoda, se puede seleccionar y copiar.
+  Ctrl + / Ctrl − agrandan o achican la letra.
+  Doble clic sobre una frase = corregirla en tu glosario.
+
+CONFIGURACIÓN (se guarda sola en config.json)
+  General ..... idioma, modo de vista, cerrar sola tras X segundos,
+                no traducir lo que ya está en español, ventanas siempre
+                visibles, tamaño de la interfaz (Normal/Grande/Muy grande),
+                guardar historial y máximo de frases
+  Apariencia .. colores (incluye alto contraste amarillo/negro), fuente
+                (Verdana, Comic Sans, OpenDyslexic…), negrita, opacidad,
+                tamaño del texto, tamaño mínimo de letra, con vista previa
+  Atajos ...... cambia cualquier atajo o desactívalos
+  Voz ......... lectura automática y velocidad de la voz
+
+MI GLOSARIO (tu base de datos personal)
+  Desde el botón "Mi glosario" agregas, editas, buscas y borras términos
+  en inglés o japonés con su traducción. Se consultan ANTES que el
+  traductor automático: útil para nombres, menús de juegos y frases que
+  salen mal traducidas.
+
+CÓMO FUNCIONA POR DENTRO
+  1. Captura de pantalla ......... mss (el monitor donde está el ratón)
+  2. Lectura del texto (OCR) ..... EasyOCR: modelo japonés+inglés y un
+                                   segundo modelo solo-inglés que relee
+                                   cada línea en inglés para más precisión
+     (o el texto copiado, sin OCR, con "Traducir lo copiado")
+  3. Glosario personal ........... glosario.json
+  4. Traducción offline .......... Argos Translate
+                                   inglés -> español directo
+                                   japonés -> inglés -> español
+  5. Presentación ................ recuadros sobre las palabras o panel
+  6. Voz ......................... voces en español de tu sistema
+  7. Historial ................... historial.json
+
+SI ALGO FALLA
+  · Abre DIAGNOSTICO_Windows.bat: muestra los mensajes de error.
+  · El archivo registro.txt guarda los errores.
+  · Para reinstalar desde cero, borra la carpeta "venv" y abre
+    INICIAR_Windows.bat otra vez.
+
+NOTAS
+  · Cada traducción tarda unos segundos (más en pantalla completa) porque
+    todo corre en tu procesador; nada se envía a internet.
+  · La traducción del japonés pasa por el inglés, así que puede sonar
+    menos natural; corrige las frases frecuentes con el glosario.
+  · La voz usa las voces en español instaladas en Windows. Si no oyes
+    nada: Configuración de Windows > Hora e idioma > Voz > agregar voz
+    en español.
+  · Mac: pedirá permisos en Ajustes > Privacidad y seguridad:
+    "Grabación de pantalla" (capturar) y "Accesibilidad" (atajos).
+  · Linux con Wayland: los atajos globales pueden no funcionar; usa los
+    botones. Si falta tkinter:  sudo apt install python3-tk
