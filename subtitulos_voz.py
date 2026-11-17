@@ -45,6 +45,7 @@ class Segmentador:
         self.audio = np.zeros(0, dtype=np.float32)   # audio reciente
         self.inicio_buf = 0                           # posición absoluta de audio[0]
         self.inicio_voz = None                        # posición absoluta donde empezó a hablar
+        self.ultimo_fin = 0                           # fin de la última frase entregada
 
     def agregar(self, trozo):
         """Recibe audio mono 16 kHz. Devuelve una lista de frases (arrays) terminadas."""
@@ -62,6 +63,8 @@ class Segmentador:
                 for v in voces:               # si la frase empezó antes en la ventana
                     if base + v["end"] > self.inicio_voz - 0.4 * SR:
                         self.inicio_voz = min(self.inicio_voz, base + v["start"])
+                # nunca volver a incluir audio de una frase ya entregada
+                self.inicio_voz = max(self.inicio_voz, self.ultimo_fin)
         else:
             largo = fin_abs - self.inicio_voz
             if not hablando_ahora or largo > self.max_frase * SR:
@@ -70,6 +73,7 @@ class Segmentador:
                 frase = self._recortar(self.inicio_voz, fin_voz)
                 if len(frase) > 0.3 * SR:
                     frases.append(frase)
+                self.ultimo_fin = fin_voz
                 self.inicio_voz = fin_abs if hablando_ahora else None
         # no guardar más audio del necesario
         guardar_desde = (self.inicio_voz if self.inicio_voz is not None else fin_abs) - self.ventana
@@ -126,6 +130,7 @@ class SubtitulosDeVoz:
         self.activo = False
         self.frases = queue.Queue()
         self._transcriptor = None
+        self._previo = None          # (texto, idioma, momento) de la última frase mostrada
 
     def iniciar(self):
         self.activo = True
@@ -199,6 +204,14 @@ class SubtitulosDeVoz:
             return None
         if not texto or idioma not in ("en", "ja"):
             return None
+        # Si la frase anterior quedó a medias (pausa en una coma) y esta llega enseguida,
+        # se muestran juntas para que la traducción tenga sentido completo.
+        ahora = time.time()
+        p = self._previo
+        if (p and p[1] == idioma and ahora - p[2] < 2.5
+                and not p[0].rstrip().endswith((".", "!", "?", "。", "！", "？", "…"))):
+            texto = p[0] + ("" if idioma == "ja" else " ") + texto
+        self._previo = (texto, idioma, ahora)
         destino = self.app.cfg.get("idioma_destino", "es")
         try:
             trad = texto if idioma == destino else self.app.motor.traducir_lote([(texto, idioma)])[0]

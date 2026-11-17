@@ -33,14 +33,25 @@ def version_base():
 
 def buscar():
     """Devuelve dict con la novedad, o None si ya está al día.
-    {'version', 'base_minima', 'url_app', 'necesita_base', 'pagina'}"""
+    {'version', 'base_minima', 'url_app', 'necesita_base', 'pagina'}
+    Revisa las últimas publicaciones y elige la de versión más alta."""
+    import re
     import requests
-    r = requests.get(API, timeout=10, headers={"Accept": "application/vnd.github+json"})
+    r = requests.get(API.replace("/latest", "?per_page=15"), timeout=10,
+                     headers={"Accept": "application/vnd.github+json"})
     r.raise_for_status()
-    rel = r.json()
-    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
-    if "version.json" not in assets or "actualizacion.zip" not in assets:
+    mejor = None
+    for rel in r.json():
+        m = re.match(r"v(\d+\.\d+\.\d+)-build(\d+)", rel.get("tag_name", ""))
+        assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+        if not m or "version.json" not in assets or "actualizacion.zip" not in assets:
+            continue
+        clave = (_num(m.group(1)), int(m.group(2)))
+        if mejor is None or clave > mejor[0]:
+            mejor = (clave, rel, assets)
+    if mejor is None:
         return None
+    _, rel, assets = mejor
     info = requests.get(assets["version.json"], timeout=10).json()
     if _num(info["version"]) <= _num(version.VERSION):
         return None
