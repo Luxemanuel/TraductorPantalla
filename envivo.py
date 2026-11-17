@@ -223,6 +223,37 @@ class CapaEnVivo:
                           text="\n".join(lineas), font=f, fill=_hex(color), tags="trad")
         c.tag_raise("marco")
 
+    def mostrar_barra(self, bloques):
+        """Modo subtítulos: toda la traducción junta, grande y centrada, tapando la zona."""
+        self.c.delete("trad")
+        if not bloques or not self.caja:
+            return
+        cfg = self.app.cfg
+        _, fondo, color = ESQUEMAS.get(cfg["esquema"], ESQUEMAS["blanco_negro"])
+        familia = FUENTES.get(cfg["fuente"], FUENTES["Arial"])[2]
+        x0, y0, x1, y1 = self.caja
+        ancho = max(80, x1 - x0 - 20)
+        f = self._fuente(familia, int(cfg.get("tam_subtitulo", 30)), "bold" if cfg["negrita"] else "normal")
+        lineas = _envolver(" ".join(b["traduccion"] for b in bloques), f, ancho)
+        alto_txt = f.metrics("linespace") * len(lineas)
+        orig_txt, alto_orig, fo = "", 0, None
+        if cfg.get("subtitulo_original", True):
+            fo = self._fuente(familia, max(11, int(cfg.get("tam_subtitulo", 30) * 0.5)), "normal")
+            orig = _envolver(" ".join(b["original"] for b in bloques), fo, ancho)[:3]
+            orig_txt, alto_orig = "\n".join(orig), fo.metrics("linespace") * len(orig) + 4
+        alto = max(y1 - y0, alto_txt + alto_orig + 12)
+        cy = (y0 + y1) / 2
+        top = max(0, cy - alto / 2)
+        self.c.create_rectangle(x0, top, x1, top + alto, fill=_hex(fondo), outline="", tags="trad")
+        y = top + (alto - alto_txt - alto_orig) / 2
+        if orig_txt:
+            self.c.create_text((x0 + x1) / 2, y, anchor="n", text=orig_txt, font=fo, justify="center",
+                               fill=_hex(tuple((a + b) // 2 for a, b in zip(color, fondo))), tags="trad")
+            y += alto_orig
+        self.c.create_text((x0 + x1) / 2, y, anchor="n", text="\n".join(lineas), font=f,
+                           justify="center", fill=_hex(color), tags="trad")
+        self.c.tag_raise("marco")
+
     # ---------- captura sin la capa (solo si Windows no la excluye) ----------
     def esconder_un_momento(self):
         try:
@@ -261,12 +292,13 @@ def _envolver(texto, fuente, ancho):
 # Sesión en vivo
 # ============================================================================
 class SesionEnVivo:
-    def __init__(self, app, mon, caja, capturar=None):
+    def __init__(self, app, mon, caja, capturar=None, estilo="palabras"):
         import mss
         self.app = app
         self.mon = mon
         self.caja = caja
-        self.tipo = "zona" if caja else "pantalla"
+        self.estilo = estilo                  # "palabras" (sobre cada línea) | "barra" (subtítulos)
+        self.tipo = "subtitulos" if estilo == "barra" else ("zona" if caja else "pantalla")
         if caja:
             x0, y0, x1, y1 = caja
             self.region = {"left": mon["left"] + x0, "top": mon["top"] + y0,
@@ -275,7 +307,8 @@ class SesionEnVivo:
             self.region = dict(mon)
         # umbrales: fracción de píxeles cambiados
         self.umbral = 0.002 if caja else 0.0008
-        self.intervalo = 300 if caja else 600
+        # cada cuánto se mira la zona (ms): el lector de Windows tarda ~0.1 s
+        self.intervalo = 100 if estilo == "barra" else (150 if caja else 400)
         self.activa = True
         self.procesando = False
         self.ref = None
@@ -326,11 +359,14 @@ class SesionEnVivo:
                 elif cambio > self.umbral:
                     if self.cambiando_desde is None:
                         self.cambiando_desde = ahora
-                    if self.firma:          # el texto cambió: quitar la traducción vieja
+                    if self.firma and self.estilo != "barra":   # quitar la traducción vieja
                         self.capa.limpiar()
                         self.firma = None
-                    sigue_cambiando = ahora - self.cambiando_desde > 2.0
-                    if (quieto or sigue_cambiando) and ahora - self.ultimo_lanzamiento > 0.4:
+                    sigue_cambiando = ahora - self.cambiando_desde > 1.5
+                    # subtítulos: traducir en cuanto cambian; texto normal: esperar a que se
+                    # termine de escribir (efecto máquina de escribir de las novelas visuales)
+                    listo = quieto or sigue_cambiando or self.estilo == "barra"
+                    if listo and ahora - self.ultimo_lanzamiento > 0.15:
                         self._lanzar(img, peq)
                 else:
                     self.cambiando_desde = None
@@ -373,10 +409,13 @@ class SesionEnVivo:
         anteriores = {x["original"] for x in self.bloques}
         nuevos = [b for b in bloques if b["original"] not in anteriores]
         firma = [(b["caja"], b["traduccion"]) for b in bloques]
-        if self.app.cfg["modo_vista"] == "panel":
+        if self.app.cfg["modo_vista"] == "panel" and self.estilo != "barra":
             self.capa.limpiar()
         elif firma != self.firma:
-            self.capa.mostrar(bloques)
+            if self.estilo == "barra":
+                self.capa.mostrar_barra(bloques)
+            else:
+                self.capa.mostrar(bloques)
         self.firma = firma
         self.bloques = bloques
         return nuevos
@@ -441,3 +480,98 @@ def capturar_ventana(win, region):
     img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
     x0, y0 = region["left"] - rc.left, region["top"] - rc.top
     return img.crop((x0, y0, x0 + region["width"], y0 + region["height"]))
+
+
+# ============================================================================
+# Barra de subtítulos (para la voz)
+# ============================================================================
+class BarraSubtitulos:
+    """Franja transparente abajo de la pantalla con el último subtítulo traducido.
+    Deja pasar los clics y no sale en las capturas."""
+
+    def __init__(self, app, mon):
+        self.app = app
+        self.mon = mon
+        self._fuentes = {}
+        self._borrar = None
+        alto = 260
+        w = self.win = tk.Toplevel(app.root)
+        w.withdraw()
+        w.overrideredirect(True)
+        w.geometry(f"{mon['width']}x{alto}+{mon['left']}+{mon['top'] + mon['height'] - alto - 60}")
+        w.configure(bg=CLAVE)
+        w.attributes("-topmost", True)
+        if ES_WINDOWS:
+            w.attributes("-transparentcolor", CLAVE)
+        try:
+            w.attributes("-alpha", max(0.3, min(1.0, app.cfg["opacidad"] / 100)))
+        except tk.TclError:
+            pass
+        self.alto = alto
+        self.c = tk.Canvas(w, bg=CLAVE, highlightthickness=0, bd=0)
+        self.c.pack(fill="both", expand=True)
+        w.deiconify()
+        w.update_idletasks()
+        hacer_traspasable(w)
+        excluir_de_captura(w)
+        self.estado("● Subtítulos de voz activos — escuchando…")
+
+    def _fuente(self, familia, tam, peso):
+        clave = (familia, tam, peso)
+        if clave not in self._fuentes:
+            self._fuentes[clave] = tkfont.Font(family=familia, size=-tam, weight=peso)
+        return self._fuentes[clave]
+
+    def estado(self, texto):
+        """Aviso pequeño (cargando, escuchando…)."""
+        self.c.delete("estado")
+        f = self._fuente("Segoe UI" if ES_WINDOWS else "Arial", 13, "bold")
+        x = self.mon["width"] // 2
+        ancho = f.measure(texto) + 20
+        self.c.create_rectangle(x - ancho / 2, self.alto - 26, x + ancho / 2, self.alto - 4,
+                                fill="#1a1a1a", outline="#ffd400", tags="estado")
+        self.c.create_text(x, self.alto - 15, text=texto, font=f, fill="#ffd400", tags="estado")
+
+    def mostrar(self, traduccion, original=""):
+        cfg = self.app.cfg
+        _, fondo, color = ESQUEMAS.get(cfg["esquema"], ESQUEMAS["blanco_negro"])
+        familia = FUENTES.get(cfg["fuente"], FUENTES["Arial"])[2]
+        tam = int(cfg.get("tam_subtitulo", 30))
+        f = self._fuente(familia, tam, "bold" if cfg["negrita"] else "normal")
+        ancho = int(self.mon["width"] * 0.8)
+        lineas = _envolver(traduccion, f, ancho)[-3:]
+        alto_txt = f.metrics("linespace") * len(lineas)
+        orig_txt, alto_orig, fo = "", 0, None
+        if original and cfg.get("subtitulo_original", True):
+            fo = self._fuente(familia, max(11, tam // 2), "normal")
+            orig = _envolver(original, fo, ancho)[-2:]
+            orig_txt, alto_orig = "\n".join(orig), fo.metrics("linespace") * len(orig) + 4
+        ancho_real = max([f.measure(l) for l in lineas] + ([fo.measure(l) for l in orig_txt.split("\n")] if fo else []))
+        x = self.mon["width"] / 2
+        abajo = self.alto - 32
+        arriba = abajo - alto_txt - alto_orig - 14
+        c = self.c
+        c.delete("sub")
+        c.create_rectangle(x - ancho_real / 2 - 16, arriba, x + ancho_real / 2 + 16, abajo,
+                           fill=_hex(fondo), outline="", tags="sub")
+        y = arriba + 7
+        if orig_txt:
+            c.create_text(x, y, anchor="n", text=orig_txt, font=fo, justify="center",
+                          fill=_hex(tuple((a + b) // 2 for a, b in zip(color, fondo))), tags="sub")
+            y += alto_orig
+        c.create_text(x, y, anchor="n", text="\n".join(lineas), font=f, justify="center",
+                      fill=_hex(color), tags="sub")
+        if self._borrar:
+            self.win.after_cancel(self._borrar)
+        segundos = max(3.0, min(9.0, 1.5 + len(traduccion) * 0.06))
+        self._borrar = self.win.after(int(segundos * 1000), lambda: c.delete("sub"))
+
+    def existe(self):
+        try:
+            return self.win.winfo_exists()
+        except tk.TclError:
+            return False
+
+    def cerrar(self):
+        if self.existe():
+            self.win.destroy()

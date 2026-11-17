@@ -90,6 +90,8 @@ ACCIONES = {
     # clave: (nombre visible, atajo por defecto)
     "pantalla": ("Traducir pantalla completa", {"ctrl": True, "alt": True, "shift": False, "tecla": "T"}),
     "zona": ("Traducir una zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "Z"}),
+    "subtitulos": ("Subtítulos de pantalla (zona)", {"ctrl": True, "alt": True, "shift": False, "tecla": "S"}),
+    "voz": ("Subtítulos de voz (audio)", {"ctrl": True, "alt": True, "shift": False, "tecla": "A"}),
     "repetir": ("Repetir la última zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "R"}),
     "portapapeles": ("Traducir lo copiado", {"ctrl": True, "alt": True, "shift": False, "tecla": "V"}),
     "detener": ("Detener / cerrar todo", {"ctrl": True, "alt": True, "shift": False, "tecla": "X"}),
@@ -114,6 +116,11 @@ DEFAULTS = {
     "atajos": {k: v[1] for k, v in ACCIONES.items()},
     "voz_auto": False,
     "voz_velocidad": 0,               # -5 … 5
+    "idioma_destino": "es",           # a qué idioma se traduce
+    "motor_traduccion": "auto",       # auto | en_linea | sin_internet
+    "modelo_voz": "base",             # base (rápido) | small (más preciso)
+    "tam_subtitulo": 30,              # px
+    "subtitulo_original": True,       # mostrar también el texto original pequeño
     "guardar_historial": True,        # conservar el historial al cerrar
     "historial_max": 300,             # entradas como máximo
 }
@@ -223,12 +230,23 @@ class Historial:
         self._cambio()
 
     def _cambio(self):
-        self.guardar()
+        self._programar_guardado()
         if self.al_cambiar:
             try:
                 self.al_cambiar()
             except Exception:
                 log.exception("Actualizando historial")
+
+    def _programar_guardado(self):
+        """Guarda como mucho una vez cada 2 s (en vivo llegan frases muy seguido)."""
+        if getattr(self, "_temporizador", None) is None:
+            self._temporizador = threading.Timer(2.0, self._guardar_diferido)
+            self._temporizador.daemon = True
+            self._temporizador.start()
+
+    def _guardar_diferido(self):
+        self._temporizador = None
+        self.guardar()
 
     def guardar(self):
         try:
@@ -282,52 +300,43 @@ class Cancelado(Exception):
     pass
 
 
-class SeparadorSimple:
-    """Separa frases sin modelos ni internet.
-
-    Argos Translate usa por defecto separadores (stanza/minisbd) que intentan
-    conectarse a internet al arrancar; para textos de pantalla (frases cortas)
-    basta con cortar en los signos de final de frase."""
-    _RE = re.compile(r"(?<=[.!?。！？])\s*")
-
-    def split_sentences(self, texto):
-        partes = [p for p in self._RE.split(texto) if p.strip()]
-        return partes or [texto]
-
-
-def usar_separador_simple(traduccion):
-    if hasattr(traduccion, "sentencizer"):
-        traduccion.sentencizer = SeparadorSimple()
-    for sub in ("t1", "t2"):            # traducciones encadenadas (ja -> en -> es)
-        if hasattr(traduccion, sub):
-            usar_separador_simple(getattr(traduccion, sub))
-
-
 class Motor:
-    def __init__(self, avisar=print):
+    """Lee el texto (OCR) y lo traduce por lotes.
+
+    cfg: función que devuelve la configuración actual (o un diccionario)."""
+    MAX_COPIADO = 6000   # caracteres: evita congelar el equipo con textos enormes
+
+    def __init__(self, avisar=print, cfg=None):
         self.avisar = avisar
+        if cfg is None:
+            cfg = cargar_config()
+        self.cfg = cfg if callable(cfg) else (lambda c=cfg: c)
         self.lector = None
-        self.lector_en = None
-        self.traductores = {}
+        self.traductor = None
         self.glosario = {}
         self.cache = {}
+        self.tiempos = (0.0, 0.0)          # (lectura, traducción) de la última vez
         self._lock = threading.Lock()
 
     def cargar(self):
+        import lector as modulo_lector
+        import traduccion
         self.cargar_glosario()
-        self.avisar("Cargando diccionarios de traducción…")
-        self._cargar_traductores()
-        self.avisar("Cargando lector de texto (OCR)… puede tardar un poco")
-        import easyocr
-        self.lector = easyocr.Reader(["ja", "en"], gpu=False, verbose=False)
-        self.lector_en = easyocr.Reader(["en"], gpu=False, verbose=False)
-        self.avisar("Calentando motores…")
-        for idioma, muestra in (("en", "Hello"), ("ja", "こんにちは")):
-            if idioma in self.traductores:
-                try:
-                    self.traductores[idioma].translate(muestra)
-                except Exception:
-                    log.exception("Fallo al calentar %s", idioma)
+        self.avisar("Preparando el lector de texto…")
+        self.lector = modulo_lector.crear_lector(self.avisar)
+        self.avisar("Preparando la traducción…")
+        carpeta = os.environ.get("ARGOS_PACKAGES_DIR") or os.path.join(RUTA_MODELOS, "argos")
+        self.traductor = traduccion.Traductor(self.cfg, carpeta)
+        threading.Thread(target=self._calentar, daemon=True).start()
+
+    def _calentar(self):
+        """Deja listo el diccionario sin internet para que el respaldo responda rápido."""
+        destino = self.cfg().get("idioma_destino", "es")
+        try:
+            if self.traductor.argos.disponible("en", destino):
+                self.traductor.argos.lote(["Hello"], "en", destino)
+        except Exception:
+            log.exception("Calentando el diccionario sin internet")
 
     def cargar_glosario(self):
         nuevo = {}
@@ -349,143 +358,102 @@ class Motor:
             return re.sub(r"\s+", " ", t).lower().strip(" .,:;!?\"'")
         return re.sub(r"\s+", "", t).strip("。、！？!?「」")
 
-    def _cargar_traductores(self):
-        from argostranslate import package, translate
-        instalados = {(p.from_code, p.to_code) for p in package.get_installed_packages()}
-        if ("en", "es") not in instalados or not ({("ja", "en"), ("ja", "es")} & instalados):
-            self.avisar("Descargando idiomas por primera vez (necesita internet)…")
-            import descargar_idiomas
-            descargar_idiomas.descargar_traductores(self.avisar)
-        langs = {l.code: l for l in translate.get_installed_languages()}
-        es = langs.get("es")
-        for origen in ("en", "ja"):
-            if origen in langs and es is not None:
-                tr = langs[origen].get_translation(es)   # ja->es pasa por inglés
-                if tr is not None:
-                    usar_separador_simple(tr)
-                    self.traductores[origen] = tr
-        if not self.traductores:
-            raise RuntimeError("No hay idiomas instalados. Ejecuta descargar_idiomas.py")
+    # ---------- traducción ----------
+    def traducir_lote(self, items, destino=None):
+        """items: [(texto, idioma_origen)] -> traducciones en el mismo orden (None si falló)."""
+        destino = destino or self.cfg().get("idioma_destino", "es")
+        res = [None] * len(items)
+        pendientes = {}
+        for i, (texto, idioma) in enumerate(items):
+            norm = self._norm(texto, idioma)
+            if destino == "es" and (idioma, norm) in self.glosario:    # 1) tu glosario
+                res[i] = self.glosario[(idioma, norm)]
+            elif (idioma, destino, norm) in self.cache:                 # 2) ya traducido antes
+                res[i] = self.cache[(idioma, destino, norm)]
+            elif idioma == destino:
+                res[i] = texto
+            else:
+                pendientes.setdefault(idioma, []).append((i, texto, (idioma, destino, norm)))
+        if len(self.cache) > 5000:
+            self.cache.clear()
+        errores = []
 
-    def traducir(self, texto, idioma):
-        clave = (idioma, self._norm(texto, idioma))
-        if clave in self.glosario:                 # 1) tu glosario personal
-            return self.glosario[clave]
-        if clave in self.cache:
-            return self.cache[clave]
-        tr = self.traductores.get(idioma)          # 2) diccionario/modelo offline
-        if tr is None:
-            return texto
-        try:
-            res = tr.translate(texto)
-        except Exception:
-            log.exception("Error traduciendo %r", texto)
-            res = texto
-        self.cache[clave] = res
+        def hacer(idioma, lista):
+            try:
+                trads = self.traductor.lote([t for _, t, _ in lista], idioma, destino)
+                for (i, _, clave), tr in zip(lista, trads):
+                    res[i] = tr
+                    self.cache[clave] = tr
+            except Exception as e:
+                log.exception("Traduciendo %s→%s", idioma, destino)
+                errores.append(e)
+        hilos = [threading.Thread(target=hacer, args=(k, v)) for k, v in pendientes.items()]
+        for h in hilos[1:]:
+            h.start()
+        if hilos:
+            hilos[0].run()            # el primer idioma en este mismo hilo, el resto en paralelo
+        for h in hilos[1:]:
+            h.join()
+        if errores and all(r is None for r in res):
+            raise errores[0]
         return res
 
+    def traducir(self, texto, idioma):
+        return self.traducir_lote([(texto, idioma)])[0] or texto
+
+    def _vale(self, texto, es_jp, modo, omitir):
+        if len(texto) < 2 or not LETRA_RE.search(texto):
+            return False
+        if (modo == "en" and es_jp) or (modo == "ja" and not es_jp):
+            return False
+        destino = self.cfg().get("idioma_destino", "es")
+        if ("ja" if es_jp else "en") == destino:
+            return False
+        if not es_jp and omitir and destino == "es" and parece_espanol(texto):
+            return False
+        return True
+
+    # ---------- pantalla ----------
     def procesar(self, imagen, modo="auto", omitir_espanol=True, seguir=lambda: True):
-        """Devuelve [{'caja':(x0,y0,x1,y1), 'original':str, 'traduccion':str, 'idioma':str}]."""
-        import numpy as np
+        """Devuelve [{'caja':(x0,y0,x1,y1), 'original', 'traduccion', 'idioma'}]."""
         with self._lock:
             if not seguir():
                 raise Cancelado()
-            arr = np.array(imagen.convert("RGB"))
-            filas = self._leer_filas(arr, modo, seguir)
+            t0 = time.perf_counter()
+            filas = self.lector.leer(imagen, modo, seguir)
+            t1 = time.perf_counter()
+            pars = [p for p in agrupar_parrafos(filas)
+                    if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
+            if not seguir():
+                raise Cancelado()
+            trads = self.traducir_lote([(p["t"], "ja" if p["jp"] else "en") for p in pars]) if pars else []
+            self.tiempos = (t1 - t0, time.perf_counter() - t1)
             bloques = []
-            for par in agrupar_parrafos(filas):
-                if not seguir():
-                    raise Cancelado()
-                texto, idioma = par["t"], ("ja" if par["jp"] else "en")
-                if len(texto) < 2 or not LETRA_RE.search(texto):
-                    continue
-                if (modo == "en" and idioma == "ja") or (modo == "ja" and idioma == "en"):
-                    continue
-                if idioma == "en" and omitir_espanol and parece_espanol(texto):
-                    continue
-                trad = self.traducir(texto, idioma).strip()
-                if not trad or trad.lower() == texto.lower():
+            for p, tr in zip(pars, trads):
+                tr = (tr or "").strip()
+                if not tr or tr.lower() == p["t"].lower():
                     continue        # nada que traducir (números, nombres propios…)
-                bloques.append({"caja": (par["x0"], par["y0"], par["x1"], par["y1"]),
-                                "original": texto, "traduccion": trad, "idioma": idioma})
+                bloques.append({"caja": (p["x0"], p["y0"], p["x1"], p["y1"]),
+                                "original": p["t"], "traduccion": tr,
+                                "idioma": "ja" if p["jp"] else "en"})
             return bloques
 
-    MAX_COPIADO = 6000   # caracteres: evita congelar el equipo con textos enormes
-
+    # ---------- texto copiado ----------
     def traducir_texto(self, texto, modo="auto", omitir_espanol=True, seguir=lambda: True):
-        """Traduce texto copiado (sin OCR). Cada línea/párrafo detecta su idioma por separado."""
+        """Traduce texto copiado (sin OCR). Cada línea detecta su idioma por separado."""
         texto = texto.replace("\r\n", "\n").replace("\r", "\n")[: self.MAX_COPIADO]
-        bloques = []
-        with self._lock:
-            for linea in texto.split("\n"):
-                if not seguir():
-                    raise Cancelado()
-                linea = linea.strip()
-                if len(linea) < 2 or not LETRA_RE.search(linea):
-                    continue
-                es_jp = bool(JP_RE.search(linea))
-                if (modo == "en" and es_jp) or (modo == "ja" and not es_jp):
-                    continue
-                if not es_jp and omitir_espanol and parece_espanol(linea):
-                    continue
-                idioma = "ja" if es_jp else "en"
-                trad = self.traducir(linea, idioma).strip()
-                if trad and trad.lower() != linea.lower():
-                    bloques.append({"caja": None, "original": linea, "traduccion": trad,
-                                    "idioma": idioma})
-        return bloques
-
-    def _leer_filas(self, arr, modo, seguir):
-        """OCR por líneas + unión de trozos de la misma línea + relectura del inglés."""
-        trozos = []
-        # Con el idioma fijado en inglés basta un solo lector (más rápido)
-        lector = self.lector_en if modo == "en" else self.lector
-        for caja, texto, conf in lector.readtext(arr, paragraph=False):
-            texto = texto.strip()
-            if conf < 0.2 or not texto:
-                continue
-            xs = [p[0] for p in caja]
-            ys = [p[1] for p in caja]
-            trozos.append({"x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys),
-                           "t": texto, "jp": bool(JP_RE.search(texto))})
-        filas = unir_misma_linea(trozos)
-        h_img, w_img = arr.shape[:2]
-        for f in filas:
-            if not seguir():
-                raise Cancelado()
-            if f["jp"] and modo != "en":
-                f["t"] = ESP_ENTRE_JP.sub("", f["t"])
-                continue
-            if modo == "en":                 # ya lo leyó el lector de inglés
-                f["t"] = corregir_ingles(f["t"])
-                continue
-            if modo == "ja":                 # en modo japonés el inglés se descarta
-                continue
-            # Releer con el modelo de inglés (más preciso). Se deja margen para no perder
-            # la puntuación final, sin invadir los renglones vecinos.
-            h = f["y1"] - f["y0"]
-            arriba, abajo = 0.3 * h, 0.3 * h
-            for o in filas:
-                if o is f or min(o["x1"], f["x1"]) <= max(o["x0"], f["x0"]):
-                    continue
-                if o["y1"] <= f["y0"]:
-                    arriba = min(arriba, (f["y0"] - o["y1"]) / 2)
-                elif o["y0"] >= f["y1"]:
-                    abajo = min(abajo, (o["y0"] - f["y1"]) / 2)
-            derecha = 1.0 * h
-            for o in filas:
-                if o is not f and o["x0"] >= f["x1"] and min(o["y1"], f["y1"]) > max(o["y0"], f["y0"]):
-                    derecha = min(derecha, (o["x0"] - f["x1"]) * 0.8)
-            caja = [int(max(0, f["x0"] - 0.15 * h)), int(min(w_img, f["x1"] + derecha)),
-                    int(max(0, f["y0"] - arriba)), int(min(h_img, f["y1"] + abajo))]
-            try:
-                r = self.lector_en.recognize(arr, horizontal_list=[caja], free_list=[], detail=0)
-                texto = " ".join(r).strip()
-                if texto:
-                    f["t"], f["jp"] = corregir_ingles(texto), False
-            except Exception:
-                log.exception("Relectura en inglés")
-        return filas
+        lineas = []
+        for linea in texto.split("\n"):
+            linea = linea.strip()
+            es_jp = bool(JP_RE.search(linea))
+            if self._vale(linea, es_jp, modo, omitir_espanol):
+                lineas.append((linea, "ja" if es_jp else "en"))
+        if not seguir():
+            raise Cancelado()
+        trads = self.traducir_lote(lineas) if lineas else []
+        return [{"caja": None, "original": l, "traduccion": t.strip(), "idioma": i}
+                for (l, i), t in zip(lineas, trads)
+                if t and t.strip() and t.strip().lower() != l.lower()]
 
 
 def corregir_ingles(texto):

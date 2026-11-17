@@ -283,6 +283,7 @@ class VentanaConfig:
         nb.add(self._pestana_general(nb), text="General", underline=0)
         nb.add(self._pestana_apariencia(nb), text="Apariencia", underline=0)
         nb.add(self._pestana_atajos(nb), text="Atajos de teclado", underline=1)
+        nb.add(self._pestana_traduccion(nb), text="Traducción y subtítulos", underline=0)
         nb.add(self._pestana_voz(nb), text="Voz", underline=0)
 
         pie = ttk.Frame(w, padding=10)
@@ -290,7 +291,7 @@ class VentanaConfig:
         ttk.Button(pie, text="Restablecer valores", command=self.restablecer).pack(side="left")
         ttk.Button(pie, text="Guardar", command=self.guardar).pack(side="right")
         ttk.Button(pie, text="Cancelar", command=self.cancelar).pack(side="right", padx=6)
-        centrar(w, app.root, 640, 600)
+        centrar(w, app.root, 700, 620)
         self._vista_previa()
 
     # ---------- utilidades ----------
@@ -404,6 +405,59 @@ class VentanaConfig:
                   ).grid(row=10, column=0, columnspan=5, sticky="w", pady=(14, 0))
         return f
 
+    def _pestana_traduccion(self, nb):
+        f = ttk.Frame(nb, padding=14)
+        self._fila(f, "Motor de traducción:", 0)
+        self._motores = {"Automático (en línea; sin internet cambia solo)": "auto",
+                         "Solo en línea (Google)": "en_linea", "Solo sin internet": "sin_internet"}
+        self.cb_motor = ttk.Combobox(f, state="readonly", width=44, values=list(self._motores))
+        self.cb_motor.set({v: k for k, v in self._motores.items()}[self.cfg.get("motor_traduccion", "auto")])
+        self.cb_motor.grid(row=0, column=1, sticky="w")
+        ttk.Label(f, foreground="#666", wraplength=560, justify="left",
+                  text="En línea es lo más rápido y preciso, y traduce el japonés directo. Sin internet "
+                       "usa diccionarios guardados en tu PC (el japonés pasa por el inglés)."
+                  ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 10))
+
+        self._fila(f, "Subtítulos de voz — modelo:", 2)
+        self._modelos = {"Rápido (base, ~150 MB)": "base", "Preciso (small, ~480 MB, más lento)": "small"}
+        self.cb_modelo = ttk.Combobox(f, state="readonly", width=44, values=list(self._modelos))
+        self.cb_modelo.set({v: k for k, v in self._modelos.items()}[self.cfg.get("modelo_voz", "base")])
+        self.cb_modelo.grid(row=2, column=1, sticky="w")
+
+        self._fila(f, "Tamaño de los subtítulos:", 3)
+        ttk.Spinbox(f, from_=14, to=72, width=6, textvariable=self._var("tam_subtitulo", tk.IntVar)
+                    ).grid(row=3, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(f, text="En los subtítulos, mostrar también el texto original (pequeño, arriba)",
+                        variable=self._var("subtitulo_original", tk.BooleanVar)
+                        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
+
+        ttk.Separator(f).grid(row=5, column=0, columnspan=2, sticky="we", pady=10)
+        lec = getattr(self.app.motor, "lector", None)
+        if lec is not None and getattr(lec, "nombre", "") == "Windows":
+            faltan = getattr(lec, "faltan", [])
+            txt = ("Lectores de Windows instalados: inglés y japonés ✓" if not faltan else
+                   f"Falta el lector de {' y '.join(faltan)}. Instálalo (gratis, necesita permiso de "
+                   f"administrador) y luego reinicia el traductor.")
+            ttk.Label(f, text=txt, wraplength=560, justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
+        ttk.Button(f, text="Instalar lectores de inglés y japonés (Windows)…",
+                   command=self._instalar_lectores).grid(row=7, column=0, columnspan=2, sticky="w", pady=6)
+        return f
+
+    def _instalar_lectores(self):
+        try:
+            import lector
+            ok = lector.instalar_lectores_windows()
+        except Exception as e:
+            ok = False
+            nucleo.log.exception("Instalar lectores")
+        if ok:
+            messagebox.showinfo("Lectores", "Se abrió una ventana de instalación. Cuando diga «Listo», "
+                                "cierra y vuelve a abrir el traductor.", parent=self.win)
+        else:
+            messagebox.showwarning("Lectores", "No se pudo abrir el instalador. Puedes hacerlo a mano: "
+                                   "Configuración de Windows → Hora e idioma → Idioma → Agregar japonés.",
+                                   parent=self.win)
+
     def _pestana_voz(self, nb):
         f = ttk.Frame(nb, padding=14)
         ttk.Checkbutton(f, text="Leer la traducción en voz alta automáticamente",
@@ -439,6 +493,8 @@ class VentanaConfig:
         c["modo_vista"] = "superpuesto" if self.cb_vista.get() == "Sobre las palabras" else "panel"
         c["esquema"] = self._esquemas.get(self.v_esquema.get(), "blanco_negro")
         c["atajos_activos"] = self.v_atajos_activos.get()
+        c["motor_traduccion"] = self._motores.get(self.cb_motor.get(), "auto")
+        c["modelo_voz"] = self._modelos.get(self.cb_modelo.get(), "base")
         c["atajos"] = {a: {k: v.get() for k, v in vs.items()} for a, vs in self.v_at.items()}
         return c
 
@@ -820,20 +876,26 @@ def ventana_ayuda(app):
     app.poner_icono(w)
     at = {a: atajo_legible(app.cfg["atajos"][a]) for a in ACCIONES}
     texto = f"""TRADUCCIÓN EN VIVO (Windows)
-  La traducción aparece encima del texto en una capa transparente:
-  los clics y el teclado la ATRAVIESAN, así que sigues usando tu juego,
-  página o programa con normalidad. Cuando el texto cambia (diálogo nuevo,
-  subtítulo, otra página) se vuelve a traducir solo en 1-2 segundos.
-  Si nada cambia, no gasta recursos.
-  · Lo más rápido: elegir solo la zona del texto (cuadro de diálogo,
-    subtítulos) y fijar el idioma (Inglés o Japonés) en vez de "Detectar".
-  · Juegos: usa el modo "ventana sin bordes" (borderless). En pantalla
-    completa exclusiva Windows no deja dibujar nada encima.
+  La traducción aparece encima del texto en una capa transparente: los clics
+  y el teclado la ATRAVIESAN, así que sigues usando tu juego o programa.
+  Cuando el texto cambia se vuelve a traducir solo (en menos de 1 segundo).
+  · Inglés y japonés mezclados se leen a la vez con "Detectar solo".
+  · Elige el idioma de destino en "Traducir a".
+  · Juegos: usa "ventana sin bordes" (borderless); en pantalla completa
+    exclusiva Windows no deja dibujar nada encima.
+
+SUBTÍTULOS
+  · De pantalla: marca la franja donde salen los subtítulos; se cubre con
+    la traducción grande y centrada (y el original pequeño arriba).
+  · De voz: escucha lo que suena en tus altavoces y muestra lo que dicen,
+    traducido, abajo de la pantalla. Sirve aunque no haya texto en pantalla.
 
 ATAJOS GLOBALES (funcionan en cualquier programa)
+  {at['zona']:<14} Elegir una zona y traducirla en vivo
+  {at['subtitulos']:<14} Subtítulos de pantalla (elegir la franja)
+  {at['voz']:<14} Subtítulos de voz (otra vez = apagar)
   {at['pantalla']:<14} Pantalla completa en vivo (otra vez = apagar)
-  {at['zona']:<14} Elegir una zona con el ratón y traducirla en vivo
-  {at['repetir']:<14} Volver a la última zona en vivo (otra vez = apagar)
+  {at['repetir']:<14} Volver a la última zona (otra vez = apagar)
   {at['portapapeles']:<14} Traducir lo que copiaste con Ctrl+C (sin leer la pantalla)
   {at['detener']:<14} Detener: cancela, cierra la traducción y calla la voz
 

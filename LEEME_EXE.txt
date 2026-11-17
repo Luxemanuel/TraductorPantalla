@@ -12,27 +12,40 @@ CÓMO ABRIRLO
   Ejecutar de todas formas (sale porque el programa no tiene firma digital).
 
 TRADUCCIÓN EN VIVO
-  La traducción aparece encima del texto en una capa transparente que
-  deja pasar los clics y el teclado: sigues usando tu juego, página o
-  programa con normalidad. Cuando el texto cambia (diálogo nuevo,
-  subtítulo, otra página) se vuelve a traducir solo en 1-2 segundos;
-  si nada cambia, no gasta recursos.
+  La traducción aparece encima del texto en una capa transparente que deja
+  pasar los clics y el teclado. Cuando el texto cambia se vuelve a traducir
+  solo, en menos de 1 segundo (lector de texto de Windows + traducción en
+  línea; sin internet usa diccionarios guardados en tu PC).
 
 ATAJOS (funcionan en cualquier programa o juego)
-  Ctrl+Alt+Z  elegir una zona con el ratón y traducirla en vivo  (lo mejor)
-  Ctrl+Alt+T  toda la pantalla en vivo (más lento)  · otra vez = apagar
-  Ctrl+Alt+R  volver a la última zona en vivo        · otra vez = apagar
+  Ctrl+Alt+Z  elegir una zona y traducirla en vivo
+  Ctrl+Alt+S  subtítulos de pantalla (marca la franja de subtítulos)
+  Ctrl+Alt+A  subtítulos de VOZ: traduce lo que se escucha (otra vez = apagar)
+  Ctrl+Alt+T  toda la pantalla en vivo                  (otra vez = apagar)
+  Ctrl+Alt+R  volver a la última zona                    (otra vez = apagar)
   Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
-  Ctrl+Alt+X  detener la traducción en vivo / callar la voz
+  Ctrl+Alt+X  detener todo
 
-CONSEJOS PARA QUE VAYA RÁPIDO
-  · Elige solo la zona del texto (cuadro de diálogo, subtítulos), no
-    toda la pantalla.
-  · Si sabes el idioma, márcalo (Inglés o Japonés) en vez de "Detectar
-    solo": lee más rápido.
-  · Juegos: ponlos en "ventana sin bordes" (borderless). En pantalla
-    completa exclusiva Windows no deja dibujar nada encima.
-  · Al abrir el programa tarda unos 10 s en cargar; después ya va fluido.
+PRIMERA VEZ: LECTOR JAPONÉS
+  El lector de texto es el de Windows. Si tu Windows no tiene el japonés,
+  el programa te avisa: Configuración > Traducción y subtítulos >
+  "Instalar lectores de inglés y japonés" (gratis; pide permiso de
+  administrador). Luego cierra y abre el traductor.
+
+IDIOMA DE DESTINO
+  En la ventana principal, "Traducir a": español, inglés, portugués,
+  francés, alemán, italiano, coreano, chino… (en línea sirven todos; para
+  usarlo sin internet, el diccionario se descarga solo la primera vez).
+
+ACTUALIZACIONES
+  El programa avisa cuando hay una versión nueva: un clic en "Actualizar"
+  descarga solo el código nuevo (menos de 1 MB) y se reinicia.
+
+CONSEJOS
+  · Juegos: usa "ventana sin bordes" (borderless). En pantalla completa
+    exclusiva Windows no deja dibujar nada encima.
+  · Si sabes el idioma, márcalo (Inglés o Japonés) en vez de "Detectar".
+  · Al abrir tarda unos segundos en preparar todo.
 
 Inglés y japonés mezclados se traducen a la vez con "Detectar solo".
 En la ventana principal tienes Historial, Mi glosario, Configuración

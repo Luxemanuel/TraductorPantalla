@@ -16,6 +16,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageTk
 
 import nucleo
@@ -27,6 +28,7 @@ import envivo
 VIVO = envivo.ES_WINDOWS or os.environ.get("TRADUCTOR_VIVO") == "1"
 
 PUERTO_INSTANCIA = 47653
+CANDADO = None          # socket que impide abrir el programa dos veces
 
 
 def activar_dpi_windows():
@@ -53,7 +55,11 @@ class App:
         self.cfg = nucleo.cargar_config()
         self.voz = Voz()
         self.cola = queue.Queue()
-        self.motor = motor or Motor(avisar=lambda m: self.cola.put(("estado", m)))
+        self.motor = motor or Motor(avisar=lambda m: self.cola.put(("estado", m)), cfg=lambda: self.cfg)
+        self.voz_subs = None          # subtítulos de voz activos
+        self.barra_voz = None
+        self.ultimo_estilo = "palabras"
+        self._estilo_zona = "palabras"
         self.vivo = None              # sesión de traducción en vivo activa
         self.listo = False
         self.ocupado = False
@@ -130,14 +136,16 @@ class App:
         f = ttk.Frame(r, padding=14)
         f.pack(fill="both", expand=True)
         ttk.Label(f, text="Traductor de Pantalla", font=self.fuente_titulo).pack(anchor="w")
-        ttk.Label(f, text="Inglés / Japonés  →  Español").pack(anchor="w", pady=(0, 10))
+        ttk.Label(f, text="Inglés / Japonés  →  el idioma que elijas").pack(anchor="w", pady=(0, 10))
 
         self.botones = {}
-        textos = ((("pantalla", "Pantalla completa en vivo"), ("zona", "Elegir zona en vivo"),
+        textos = ((("zona", "Elegir zona en vivo"), ("subtitulos", "Subtítulos de pantalla"),
+                   ("voz", "Subtítulos de voz (audio)"), ("pantalla", "Pantalla completa en vivo"),
                    ("repetir", "Volver a la última zona"), ("portapapeles", "Traducir lo copiado"))
                   if VIVO else
                   (("pantalla", "Traducir pantalla completa"), ("zona", "Traducir una zona"),
-                   ("repetir", "Repetir la última zona"), ("portapapeles", "Traducir lo copiado")))
+                   ("repetir", "Repetir la última zona"), ("portapapeles", "Traducir lo copiado"),
+                   ("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz (audio)")))
         for accion, texto in textos:
             b = ttk.Button(f, style="Grande.TButton",
                            command=lambda a=accion: self.accion(a))
@@ -166,6 +174,18 @@ class App:
             ttk.Radiobutton(idi, text=t, value=v, variable=self.v_idioma).pack(side="left", padx=4)
         self.v_idioma.trace_add("write", lambda *_: self._cambiar("idioma_origen", self.v_idioma.get()))
 
+        dest = ttk.LabelFrame(f, text="Traducir a", padding=6)
+        dest.pack(fill="x", pady=4)
+        import traduccion
+        self._idiomas_dest = {v: k for k, v in traduccion.IDIOMAS_DESTINO.items()}
+        self.cb_destino = ttk.Combobox(dest, state="readonly", width=22,
+                                       values=list(traduccion.IDIOMAS_DESTINO.values()))
+        self.cb_destino.set(traduccion.IDIOMAS_DESTINO.get(self.cfg["idioma_destino"], "Español"))
+        self.cb_destino.pack(side="left", padx=4)
+        self.cb_destino.bind("<<ComboboxSelected>>", lambda e: self._cambiar_destino())
+        self.lbl_motor = ttk.Label(dest, foreground="#666")
+        self.lbl_motor.pack(side="left", padx=8)
+
         vis = ttk.LabelFrame(f, text="Mostrar la traducción", padding=6)
         vis.pack(fill="x", pady=4)
         self.v_vista = tk.StringVar(value=self.cfg["modo_vista"])
@@ -179,12 +199,15 @@ class App:
                                          ("Mi glosario", self.abrir_glosario),
                                          ("Configuración", self.abrir_config),
                                          ("Ayuda", lambda: ventanas.ventana_ayuda(self)),
+                                         ("Actualizar", lambda: self.buscar_actualizacion(True)),
                                          ("Salir", self.salir))):
             ttk.Button(fila, text=texto, command=fn).grid(row=i // 3, column=i % 3, sticky="we",
-                                                          padx=1, pady=1, columnspan=2 if i == 4 else 1)
+                                                          padx=1, pady=1)
         for c in range(3):
             fila.columnconfigure(c, weight=1, uniform="b")
 
+        self.btn_novedad = ttk.Button(f, style="Grande.TButton", command=self._instalar_novedad)
+        self.novedad = None
         self.barra_prog = ttk.Progressbar(f, mode="indeterminate")
         self.barra_prog.pack(fill="x", pady=(10, 2))
         self.lbl_estado = ttk.Label(f, text="Iniciando…", wraplength=340, justify="left")
@@ -208,7 +231,9 @@ class App:
             self.botones[accion][0].state(["!disabled"] if activo else ["disabled"])
         self.botones["repetir"][0].state(["!disabled"] if activo and self.ultima_zona else ["disabled"])
         hay_algo = (self.ocupado or self.voz.hablando() or self._overlay_abierto() or self.selector
-                    or self.vivo is not None)
+                    or self.vivo is not None or self.voz_subs is not None)
+        self.botones["voz"][0].state(["!disabled"] if self.listo else ["disabled"])
+        self.botones["subtitulos"][0].state(["!disabled"] if self.listo and not self.ocupado else ["disabled"])
         for b in self.botones_ultima:
             b.state(["!disabled"] if self.ultimos_bloques else ["disabled"])
         self.botones["detener"][0].state(["!disabled"] if hay_algo else ["disabled"])
@@ -275,9 +300,12 @@ class App:
                 tipo, dato = self.cola.get_nowait()
                 if tipo == "estado":
                     self.estado(dato)
+                elif tipo == "novedad":
+                    self._mostrar_novedad(*dato)
                 elif tipo == "listo":
+                    self.root.after(4000, lambda: self.buscar_actualizacion(False))
                     self.listo = True
-                    self.estado(f"Listo ({dato:.0f} s). Usa los botones o los atajos.  F1 = ayuda")
+                    self.estado(f"Listo ({dato:.0f} s). {self._info_lector()}  F1 = ayuda")
                 elif tipo == "error":
                     self.ocupado = False
                     self.estado(dato, error=True)
@@ -289,6 +317,16 @@ class App:
                     self._mostrar_texto(*dato)
                 elif tipo == "vivo":
                     self._resultado_vivo(*dato)
+                elif tipo == "voz":
+                    self._resultado_voz(*dato)
+                elif tipo == "voz_estado":
+                    sesion, texto = dato
+                    if sesion is self.voz_subs:
+                        self.estado(texto)
+                        if self.barra_voz is not None and self.barra_voz.existe():
+                            self.barra_voz.estado(texto if len(texto) < 90 else texto[:87] + "…")
+                        if not sesion.activo:
+                            self.detener_voz()
                 elif tipo == "vivo_error":
                     sesion, msg = dato
                     sesion.error()
@@ -326,7 +364,7 @@ class App:
         if accion == "portapapeles":
             self._traducir_copiado()
             return
-        if VIVO:
+        if VIVO or accion == "voz":
             self._accion_vivo(accion)
             return
         self.fuente_actual = accion
@@ -343,11 +381,18 @@ class App:
     # ---------- modo en vivo ----------
     def _accion_vivo(self, accion):
         # pulsar otra vez el mismo atajo apaga la traducción en vivo
+        if accion == "voz":
+            if self.voz_subs is not None:
+                self.detener_voz()
+                self.estado("Subtítulos de voz apagados.")
+            else:
+                self.iniciar_voz()
+            return
         if self.vivo is not None and (
                 (accion == "pantalla" and self.vivo.tipo == "pantalla") or
-                (accion == "repetir" and self.vivo.tipo == "zona"
-                 and self.ultima_zona and self.vivo.caja == self.ultima_zona[1])):
-            self.detener()
+                (accion == "repetir" and self.ultima_zona and self.vivo.caja == self.ultima_zona[1])):
+            self.detener_vivo()
+            self.estado("Traducción en vivo detenida.")
             return
         if accion == "pantalla":
             import mss
@@ -355,8 +400,9 @@ class App:
                 mon = self._monitor_actual(sct)
             self.iniciar_vivo(mon, None)
         elif accion == "repetir":
-            self.iniciar_vivo(*self.ultima_zona)
-        else:                                       # zona: congelar la pantalla y elegir
+            self.iniciar_vivo(*self.ultima_zona, estilo=self.ultimo_estilo)
+        else:                                       # zona / subtítulos: congelar y elegir
+            self._estilo_zona = "barra" if accion == "subtitulos" else "palabras"
             self.detener_vivo()
             self.voz.detener()
             self.ocupado = True
@@ -366,15 +412,16 @@ class App:
             self.root.withdraw()
             self.root.after(250, lambda: self._capturar("zona", self.trabajo))
 
-    def iniciar_vivo(self, mon, caja):
+    def iniciar_vivo(self, mon, caja, estilo="palabras"):
         self.detener_vivo()
+        self.ultimo_estilo = estilo
         if self._overlay_abierto():
             self.overlay.cerrar()
         self.ocupado = False
         self.trabajo += 1
         self.fuente_actual = "zona" if caja else "pantalla"
         try:
-            self.vivo = envivo.SesionEnVivo(self, mon, caja,
+            self.vivo = envivo.SesionEnVivo(self, mon, caja, estilo=estilo,
                                             capturar=getattr(self, "capturar_vivo", None))
         except Exception as e:
             log.exception("No se pudo iniciar el modo en vivo")
@@ -382,7 +429,7 @@ class App:
             self.estado(f"No se pudo iniciar la traducción en vivo: {e}", error=True)
             return
         self._ocultar_mis_ventanas(True)
-        que = "la zona elegida" if caja else "la pantalla"
+        que = "los subtítulos" if estilo == "barra" else ("la zona elegida" if caja else "la pantalla")
         self.estado(f"● EN VIVO: leyendo {que}… Sigue usando tus programas con normalidad.")
 
     def _mis_ventanas(self):
@@ -424,12 +471,151 @@ class App:
             self.panel.mostrar(bloques, enfocar=False)
         if sesion.lecturas <= 1 or nuevos:
             self._ocultar_mis_ventanas(True)     # por si se abrió una ventana nueva
-        que = "zona" if sesion.caja else "pantalla"
+        que = {"subtitulos": "subtítulos", "zona": "zona", "pantalla": "pantalla"}[sesion.tipo]
         detalle = self._resumen(bloques) if bloques else "sin texto para traducir"
-        self.estado(f"● EN VIVO ({que}): {detalle} · lectura {duracion:.1f} s.\n"
-                    f"Se actualiza sola cuando el texto cambia.")
+        leer, trad = self.motor.tiempos
+        self.estado(f"● EN VIVO ({que}): {detalle}\nlectura {leer:.2f} s + traducción {trad:.2f} s · "
+                    f"se actualiza sola.")
+        self._mostrar_motor()
+
+    # ---------- subtítulos de voz ----------
+    def iniciar_voz(self):
+        import subtitulos_voz
+        import mss
+        with mss.mss() as sct:
+            mon = self._monitor_actual(sct)
+        try:
+            self.barra_voz = envivo.BarraSubtitulos(self, mon)
+            self.voz_subs = subtitulos_voz.SubtitulosDeVoz(self)
+            self.voz_subs.iniciar()
+        except Exception as e:
+            log.exception("Subtítulos de voz")
+            self.detener_voz()
+            self.estado(f"No se pudieron iniciar los subtítulos de voz: {e}", error=True)
+            return
+        self.estado("● Subtítulos de voz: preparando… (Ctrl+Alt+A para apagar)")
+
+    def detener_voz(self):
+        if self.voz_subs is not None:
+            self.voz_subs.detener()
+            self.voz_subs = None
+        if self.barra_voz is not None:
+            self.barra_voz.cerrar()
+            self.barra_voz = None
+
+    def _resultado_voz(self, sesion, r):
+        if sesion is not self.voz_subs:
+            return
+        if self.barra_voz is not None and self.barra_voz.existe():
+            self.barra_voz.mostrar(r["traduccion"], r["original"])
+        bloque = {"caja": None, "original": r["original"], "traduccion": r["traduccion"], "idioma": r["idioma"]}
+        self.ultimos_bloques = [bloque]
+        self.historial.agregar([bloque], "voz")
+        self.estado(f"● Subtítulos de voz ({'inglés' if r['idioma'] == 'en' else 'japonés'}): "
+                    f"apareció {r['demora']:.1f} s después de terminar la frase.")
+        self._mostrar_motor()
+
+    # ---------- actualizaciones ligeras ----------
+    def buscar_actualizacion(self, manual):
+        if manual:
+            self.estado("Buscando actualizaciones…")
+
+        def tarea():
+            try:
+                import actualizar
+                self.cola.put(("novedad", (actualizar.buscar(), manual, None)))
+            except Exception as e:
+                log.warning("Buscar actualización: %s", e)
+                self.cola.put(("novedad", (None, manual, str(e))))
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _mostrar_novedad(self, novedad, manual, error):
+        import version
+        if error:
+            if manual:
+                self.estado(f"No pude revisar si hay actualizaciones ({error}).", error=True)
+            return
+        if not novedad:
+            if manual:
+                self.estado(f"Ya tienes la última versión ({version.VERSION}).")
+            return
+        self.novedad = novedad
+        self.btn_novedad.configure(text=f"⬆ Actualizar a la versión {novedad['version']}")
+        self.btn_novedad.pack(fill="x", pady=(8, 0), before=self.barra_prog)
+        self.estado(f"Hay una versión nueva ({novedad['version']})."
+                    + (" Necesita descargar el paquete completo." if novedad["necesita_base"]
+                       else " Es una actualización pequeña: un clic y listo."))
+
+    def _instalar_novedad(self):
+        n = self.novedad
+        if not n:
+            return
+        if n["necesita_base"]:
+            if messagebox.askyesno("Actualización", f"La versión {n['version']} trae librerías nuevas: hay "
+                                   "que descargar el paquete completo una vez.\n\n¿Abrir la página de "
+                                   "descarga?", parent=self.root):
+                import webbrowser
+                webbrowser.open(n["pagina"])
+            return
+        if not messagebox.askyesno("Actualización", f"¿Instalar la versión {n['version']} ahora?\n"
+                                   "El traductor se cerrará y se volverá a abrir solo.", parent=self.root):
+            return
+        self.estado("Descargando la actualización…")
+        self.root.update_idletasks()
+        try:
+            import actualizar
+            actualizar.descargar_y_aplicar(n)
+        except Exception as e:
+            log.exception("Aplicando actualización")
+            self.estado(f"No se pudo actualizar: {e}", error=True)
+            return
+        self.detener_vivo()
+        self.detener_voz()
+        self.historial.guardar()
+        self.guardar_cfg()
+        global CANDADO
+        if CANDADO is not None:
+            CANDADO.close()
+        actualizar.reiniciar()
+
+    # ---------- idioma de destino ----------
+    def _cambiar_destino(self):
+        codigo = self._idiomas_dest.get(self.cb_destino.get(), "es")
+        self._cambiar("idioma_destino", codigo)
+        self.estado(f"Ahora se traduce a {self.cb_destino.get()}.")
+        if self.listo and self.motor.traductor is not None:
+            argos = self.motor.traductor.argos
+
+            def preparar():   # diccionario sin internet para ese idioma (respaldo)
+                try:
+                    if not argos.disponible("en", codigo) or not argos.disponible("ja", codigo):
+                        for origen in ("en", "ja"):
+                            argos.descargar(origen, codigo, lambda m: self.cola.put(("estado", m)))
+                        self.cola.put(("estado", f"Listo también sin internet: {self.cb_destino.get()}."))
+                except Exception:
+                    log.exception("Descargando diccionario sin internet")
+            threading.Thread(target=preparar, daemon=True).start()
+
+    def _mostrar_motor(self):
+        t = self.motor.traductor
+        if t is not None and t.ultimo_motor:
+            self.lbl_motor.configure(text=f"Traducción: {t.ultimo_motor}")
+
+    def _info_lector(self):
+        lec = self.motor.lector
+        if lec is None:
+            return ""
+        if getattr(lec, "faltan", None):
+            return (f"Falta el lector de {' y '.join(lec.faltan)} de Windows: "
+                    f"Configuración → «Instalar lectores».")
+        return f"Lector: {lec.nombre}."
 
     def detener(self):
+        if self.voz_subs is not None:
+            self.detener_voz()
+            self.estado("Subtítulos de voz apagados.")
+            if self.vivo is None:
+                return
         if self.detener_vivo():
             self.trabajo += 1
             self.voz.detener()
@@ -535,7 +721,7 @@ class App:
                 self.ultima_zona = (mon, caja)
                 if VIVO:
                     self._restaurar_ventanas()
-                    self.iniciar_vivo(mon, caja)
+                    self.iniciar_vivo(mon, caja, estilo=self._estilo_zona)
                     return
                 self.ocupado = True
                 self._procesar(img, mon, caja, trabajo)
@@ -736,7 +922,9 @@ class App:
             if self._hk is not None:
                 self._hk.stop()
             self.detener_vivo()
+            self.detener_voz()
             self.voz.detener()
+            self.historial.guardar()
             self.guardar_cfg()
             self.root.destroy()
         finally:
@@ -747,9 +935,10 @@ class App:
 
 
 def autoprueba():
-    """Comprueba sin interfaz que el OCR y la traducción funcionan (usado al fabricar el .exe).
-    Escribe el resultado en autoprueba.txt y sale con código 0 si todo va bien."""
+    """Comprueba sin interfaz el lector, la traducción (en línea y sin internet), la voz y el
+    modo en vivo (usado al fabricar el .exe). Escribe autoprueba.txt; código 0 si todo va bien."""
     import traceback
+    import statistics
     lineas, ok = [], False
     try:
         img = Image.new("RGB", (980, 270), "white")
@@ -759,18 +948,57 @@ def autoprueba():
         d.text((20, 90), "Do you want to save your progress?", font=f, fill="black")
         fj = nucleo.cargar_fuente_cjk(40)
         if fj:
-            d.text((20, 180), "ありがとうございます", font=fj, fill="black")
+            d.text((20, 180), "魔法の剣を手に入れた！", font=fj, fill="black")
+        cfg = nucleo.cargar_config()
         t0 = time.time()
-        m = Motor(avisar=lambda x: lineas.append("· " + x))
+        m = Motor(avisar=lambda x: lineas.append("· " + x), cfg=cfg)
         m.cargar()
-        lineas.append(f"Carga: {time.time() - t0:.1f} s")
-        t0 = time.time()
+        lec = m.lector
+        lineas.append(f"Carga: {time.time() - t0:.1f} s · lector {lec.nombre} · idiomas de Windows: "
+                      f"{getattr(lec, 'etiquetas', '?')} · faltan: {lec.faltan}")
+        # --- lector: velocidad ---
+        veces = []
+        for _ in range(6):
+            t = time.perf_counter()
+            filas = lec.leer(img)
+            veces.append(time.perf_counter() - t)
+        lineas.append(f"LECTOR: {statistics.median(veces[1:]):.3f} s por lectura (mediana) · líneas: "
+                      f"{[x['t'] for x in filas]}")
+        # --- pantalla completa con traducción ---
+        t = time.perf_counter()
         bloques = m.procesar(img)
-        lineas.append(f"Lectura + traducción: {time.time() - t0:.1f} s")
+        lineas.append(f"Lectura + traducción: {time.perf_counter() - t:.2f} s "
+                      f"(lectura {m.tiempos[0]:.2f} + traducción {m.tiempos[1]:.2f}, {m.traductor.ultimo_motor})")
         for b in bloques:
-            lineas.append(f"[{b['idioma']}] {b['original']}  =>  {b['traduccion']}")
+            lineas.append(f"  [{b['idioma']}] {b['original']}  =>  {b['traduccion']}")
         idiomas = {b["idioma"] for b in bloques}
-        ok = len(bloques) >= 2 and "en" in idiomas and (fj is None or "ja" in idiomas)
+        ok_lector = len(bloques) >= 2 and "en" in idiomas
+        ok_japones = (not fj or not lec.tiene_japones) or "ja" in idiomas
+        lineas.append(f"Inglés y japonés en la misma imagen: {'OK' if ok_japones else 'FALLO'} "
+                      f"(lector japonés {'sí' if lec.tiene_japones else 'NO instalado'}, fuente {'sí' if fj else 'no'})")
+        # --- motores de traducción ---
+        frases = ["Welcome to the village, traveler.", "Do you want to save your progress?"]
+        ok_linea = False
+        for origen, textos, destino in (("en", frases, "es"), ("en", frases, "pt"),
+                                        ("ja", ["魔法の剣を手に入れた！"], "es")):
+            try:
+                t = time.perf_counter()
+                r = m.traductor.google.lote(textos, origen, destino)
+                lineas.append(f"EN LÍNEA {origen}→{destino}: {time.perf_counter() - t:.2f} s  {r}")
+                ok_linea = True
+            except Exception as e:
+                lineas.append(f"EN LÍNEA {origen}→{destino}: FALLO {e}")
+        ok_offline = False
+        for origen, textos in (("en", frases), ("ja", ["魔法の剣を手に入れた！"])):
+            try:
+                t = time.perf_counter()
+                r = m.traductor.argos.lote(textos, origen, "es")
+                lineas.append(f"SIN INTERNET {origen}→es: {time.perf_counter() - t:.2f} s  {r}")
+                ok_offline = True
+            except Exception as e:
+                lineas.append(f"SIN INTERNET {origen}→es: FALLO {e}")
+        ok_voz = autoprueba_voz(m, cfg, lineas)
+        ok = ok_lector and ok_japones and ok_linea and ok_offline and ok_voz
         if ok and VIVO:
             ok = autoprueba_vivo(m, lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
@@ -780,6 +1008,41 @@ def autoprueba():
     with open(os.path.join(nucleo.BASE, "autoprueba.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lineas))
     os._exit(0 if ok else 1)
+
+
+def autoprueba_voz(m, cfg, lineas):
+    """Pasa un audio con voz por el mismo camino que el audio del sistema."""
+    import subtitulos_voz as sv
+    ruta = os.path.join(nucleo.BASE, "voz_prueba.wav")
+    if not os.path.isfile(ruta):
+        lineas.append("VOZ: no hay audio de prueba (se omite)")
+        return True
+
+    class AppFalsa:
+        pass
+    a = AppFalsa()
+    a.cfg, a.motor, a.cola = cfg, m, queue.Queue()
+    servicio = sv.SubtitulosDeVoz(a)
+    t = time.time()
+    servicio._transcriptor = sv.Transcriptor(cfg.get("modelo_voz", "base"), lambda x: None)
+    lineas.append(f"VOZ: modelo cargado en {time.time() - t:.1f} s")
+    audio = sv.leer_wav(ruta)
+    silencio = np.zeros(int(0.8 * sv.SR), dtype=np.float32)
+    audio = np.concatenate([silencio, audio, silencio])
+    seg, n, resultados = sv.Segmentador(), int(sv.PASO * sv.SR), []
+    for i in range(0, len(audio), n):
+        for frase in seg.agregar(audio[i:i + n]):
+            resultados.append(servicio.procesar_frase(frase, time.time()))
+    for frase in seg.terminar():
+        resultados.append(servicio.procesar_frase(frase, time.time()))
+    for r in resultados:
+        if r:
+            lineas.append(f"  VOZ [{r['idioma']}] {r['original']}  =>  {r['traduccion']}  "
+                          f"(listo {r['demora']:.2f} s después de terminar la frase)")
+    texto = " ".join(r["original"].lower() for r in resultados if r)
+    ok = "village" in texto and "forest" in texto
+    lineas.append(f"VOZ: {'OK' if ok else 'FALLO'}")
+    return ok
 
 
 def autoprueba_vivo(m, lineas):
@@ -850,6 +1113,13 @@ def autoprueba_vivo(m, lineas):
         "do you want to save your progress" in b["original"].lower() for b in app.vivo.bloques))
     lineas.append(f"Actualización automática al cambiar el texto: {'OK' if ok2 else 'FALLO'} "
                   f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+    # modo subtítulos (barra) sobre la misma ventana
+    t2 = time.time()
+    app.iniciar_vivo(mon, caja, estilo="barra")
+    ok3 = bombear(30, lambda: app.vivo is not None and any(
+        "progress" in b["original"].lower() for b in app.vivo.bloques))
+    lineas.append(f"Subtítulos de pantalla (barra): {'OK' if ok3 else 'FALLO'} en {time.time() - t2:.1f} s")
+    ok2 = ok2 and ok3
     # sin cambios no debe volver a leer
     n = app.vivo.lecturas if app.vivo else 0
     bombear(3)
@@ -1022,14 +1292,21 @@ def main():
     if "--autoprueba" in sys.argv:
         autoprueba()
     # Evitar abrirlo dos veces (los atajos chocarían)
+    global CANDADO
     candado = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        candado.bind(("127.0.0.1", PUERTO_INSTANCIA))
-    except OSError:
+    intentos = 30 if os.environ.pop("TRADUCTOR_REINICIO", "") else 1
+    for intento in range(intentos):  # tras una actualización, esperar a que se cierre la anterior
+        try:
+            candado.bind(("127.0.0.1", PUERTO_INSTANCIA))
+            break
+        except OSError:
+            time.sleep(0.2)
+    else:
         r = tk.Tk()
         r.withdraw()
         messagebox.showinfo("Traductor de Pantalla", "El traductor ya está abierto.")
         return
+    CANDADO = candado
     try:
         App().correr()
     except Exception:

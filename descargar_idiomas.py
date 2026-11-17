@@ -1,62 +1,39 @@
 # -*- coding: utf-8 -*-
 """
-Descarga los "diccionarios" (modelos de traducción y de lectura de texto)
-para trabajar sin internet:
-  - Argos Translate: inglés->español, japonés->inglés (y japonés->español directo si existe)
-  - EasyOCR: lectura de texto en japonés e inglés
-Solo hace falta ejecutarlo una vez (los .bat/.sh de inicio lo hacen solos).
+Descarga los diccionarios SIN INTERNET (respaldo cuando no hay conexión):
+inglés→español y japonés→inglés (japonés→español pasa por el inglés).
+Para otros idiomas de destino el programa los descarga solo cuando los eliges.
+El lector de texto es el de Windows: no hay que descargar nada para él.
 """
-PARES = [("en", "es"), ("ja", "es"), ("ja", "en")]
+import os
+
+import nucleo
+from traduccion import ArgosLite
 
 
-def descargar_traductores(avisar=print):
-    from argostranslate import package
-    avisar("Consultando el índice de idiomas…")
-    package.update_package_index()
-    disponibles = package.get_available_packages()
-    instalados = {(p.from_code, p.to_code) for p in package.get_installed_packages()}
-    for origen, destino in PARES:
-        if (origen, destino) in instalados:
-            avisar(f"  ✓ {origen}->{destino} ya instalado")
-            continue
-        if (origen, destino) == ("ja", "en") and ("ja", "es") in instalados:
-            continue  # ya hay japonés->español directo
-        paquete = next((p for p in disponibles
-                        if p.from_code == origen and p.to_code == destino), None)
-        if paquete is None:
-            if (origen, destino) != ("ja", "es"):
-                avisar(f"  ✗ No se encontró {origen}->{destino}")
-            continue
-        avisar(f"  Descargando {origen}->{destino}…")
-        package.install_from_path(paquete.download())
-        instalados.add((origen, destino))
-        avisar(f"  ✓ {origen}->{destino} instalado")
+def carpeta_argos():
+    return os.environ.get("ARGOS_PACKAGES_DIR") or os.path.join(nucleo.RUTA_MODELOS, "argos")
 
 
-def descargar_ocr(avisar=print):
-    avisar("Descargando modelos de lectura (OCR) japonés + inglés…")
-    import easyocr
-    easyocr.Reader(["ja", "en"], gpu=False, verbose=False)
-    easyocr.Reader(["en"], gpu=False, verbose=False)
-    avisar("  ✓ OCR listo")
+def descargar_traductores(avisar=print, destino="es"):
+    argos = ArgosLite(carpeta_argos())
+    ok = True
+    for origen in ("en", "ja"):
+        if not argos.descargar(origen, destino, avisar):
+            ok = False
+    return ok
 
 
 def probar(avisar=print):
-    """Traduce dos frases de prueba para confirmar que todo quedó bien instalado."""
-    from argostranslate import translate
-    from nucleo import usar_separador_simple
-    langs = {l.code: l for l in translate.get_installed_languages()}
+    argos = ArgosLite(carpeta_argos())
     for origen, frase in (("en", "Welcome to the village, traveler."), ("ja", "ありがとうございます。")):
         try:
-            tr = langs[origen].get_translation(langs["es"])
-            usar_separador_simple(tr)
-            avisar(f"  Prueba {origen}->es:  {frase}  =>  {tr.translate(frase)}")
+            avisar(f"  Prueba sin internet {origen}->es:  {frase}  =>  {argos.lote([frase], origen, 'es')[0]}")
         except Exception as e:
             avisar(f"  ✗ Prueba {origen}->es falló: {e}")
 
 
 if __name__ == "__main__":
     descargar_traductores()
-    descargar_ocr()
     probar()
-    print("\nTodo listo. Ya puedes usar el traductor sin internet.")
+    print("\nListo.")

@@ -10,3 +10,9 @@ autoprueba.txt
 icono.ico
 *.spec
 *.zip
+app/
+app_nueva/
+app_anterior/
+voz_prueba.wav
+version.json
+actualizacion.zip
