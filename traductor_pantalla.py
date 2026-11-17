@@ -21,6 +21,10 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageTk
 import nucleo
 from nucleo import ACCIONES, TAM_INTERFAZ, Motor, Voz, Cancelado, atajo_legible, atajo_pynput, log
 import ventanas
+import envivo
+
+# En Windows la traducción es "en vivo" (capa transparente que deja pasar los clics).
+VIVO = envivo.ES_WINDOWS or os.environ.get("TRADUCTOR_VIVO") == "1"
 
 PUERTO_INSTANCIA = 47653
 
@@ -40,7 +44,7 @@ def activar_dpi_windows():
 
 
 class App:
-    def __init__(self):
+    def __init__(self, motor=None):
         activar_dpi_windows()
         self.root = tk.Tk()
         self.root.withdraw()
@@ -49,7 +53,8 @@ class App:
         self.cfg = nucleo.cargar_config()
         self.voz = Voz()
         self.cola = queue.Queue()
-        self.motor = Motor(avisar=lambda m: self.cola.put(("estado", m)))
+        self.motor = motor or Motor(avisar=lambda m: self.cola.put(("estado", m)))
+        self.vivo = None              # sesión de traducción en vivo activa
         self.listo = False
         self.ocupado = False
         self.trabajo = 0              # identifica cada traducción (para poder cancelar)
@@ -77,7 +82,10 @@ class App:
         self._registrar_atajos()
         self.root.protocol("WM_DELETE_WINDOW", self.salir)
         self.root.deiconify()
-        threading.Thread(target=self._cargar_motor, daemon=True).start()
+        if motor is not None:          # motor ya cargado (autoprueba)
+            self.listo = True
+        else:
+            threading.Thread(target=self._cargar_motor, daemon=True).start()
         self.root.after(100, self._revisar_cola)
 
     # ======================================================================
@@ -124,10 +132,12 @@ class App:
         ttk.Label(f, text="Inglés / Japonés  →  Español").pack(anchor="w", pady=(0, 10))
 
         self.botones = {}
-        for accion, texto in (("pantalla", "Traducir pantalla completa"),
-                              ("zona", "Traducir una zona"),
-                              ("repetir", "Repetir la última zona"),
-                              ("portapapeles", "Traducir lo copiado")):
+        textos = ((("pantalla", "Pantalla completa en vivo"), ("zona", "Elegir zona en vivo"),
+                   ("repetir", "Volver a la última zona"), ("portapapeles", "Traducir lo copiado"))
+                  if VIVO else
+                  (("pantalla", "Traducir pantalla completa"), ("zona", "Traducir una zona"),
+                   ("repetir", "Repetir la última zona"), ("portapapeles", "Traducir lo copiado")))
+        for accion, texto in textos:
             b = ttk.Button(f, style="Grande.TButton",
                            command=lambda a=accion: self.accion(a))
             b.pack(fill="x", pady=2)
@@ -136,6 +146,17 @@ class App:
         b.pack(fill="x", pady=(2, 8))
         self.botones["detener"] = (b, "■ Detener")
         self._textos_botones()
+
+        ult = ttk.Frame(f)
+        ult.pack(fill="x", pady=(0, 6))
+        ttk.Label(ult, text="Última traducción:").pack(side="left")
+        self.botones_ultima = []
+        for texto, fn in (("Copiar", lambda: self.copiar_texto(ventanas.texto_de(self.ultimos_bloques))),
+                          ("Leer", lambda: self.leer(ventanas.texto_de(self.ultimos_bloques))),
+                          ("Ver texto", lambda: self.panel.mostrar(self.ultimos_bloques))):
+            b = ttk.Button(ult, text=texto, command=fn, width=9)
+            b.pack(side="left", padx=2)
+            self.botones_ultima.append(b)
 
         idi = ttk.LabelFrame(f, text="Idioma de origen", padding=6)
         idi.pack(fill="x", pady=4)
@@ -185,7 +206,10 @@ class App:
         for accion in ("pantalla", "zona", "portapapeles"):
             self.botones[accion][0].state(["!disabled"] if activo else ["disabled"])
         self.botones["repetir"][0].state(["!disabled"] if activo and self.ultima_zona else ["disabled"])
-        hay_algo = self.ocupado or self.voz.hablando() or self._overlay_abierto() or self.selector
+        hay_algo = (self.ocupado or self.voz.hablando() or self._overlay_abierto() or self.selector
+                    or self.vivo is not None)
+        for b in self.botones_ultima:
+            b.state(["!disabled"] if self.ultimos_bloques else ["disabled"])
         self.botones["detener"][0].state(["!disabled"] if hay_algo else ["disabled"])
         if self.ocupado != getattr(self, "_animando", False):
             self._animando = self.ocupado
@@ -262,6 +286,13 @@ class App:
                     self._mostrar_resultado(*dato)
                 elif tipo == "resultado_texto":
                     self._mostrar_texto(*dato)
+                elif tipo == "vivo":
+                    self._resultado_vivo(*dato)
+                elif tipo == "vivo_error":
+                    sesion, msg = dato
+                    sesion.error()
+                    if sesion is self.vivo:
+                        self.estado(f"Error al leer: {msg}", error=True)
         except queue.Empty:
             pass
         self._actualizar_botones()
@@ -294,6 +325,9 @@ class App:
         if accion == "portapapeles":
             self._traducir_copiado()
             return
+        if VIVO:
+            self._accion_vivo(accion)
+            return
         self.fuente_actual = accion
         if self._overlay_abierto():
             self.overlay.cerrar()
@@ -305,7 +339,80 @@ class App:
         self.root.withdraw()
         self.root.after(300, lambda: self._capturar(accion, self.trabajo))
 
+    # ---------- modo en vivo ----------
+    def _accion_vivo(self, accion):
+        # pulsar otra vez el mismo atajo apaga la traducción en vivo
+        if self.vivo is not None and (
+                (accion == "pantalla" and self.vivo.tipo == "pantalla") or
+                (accion == "repetir" and self.vivo.tipo == "zona"
+                 and self.ultima_zona and self.vivo.caja == self.ultima_zona[1])):
+            self.detener()
+            return
+        if accion == "pantalla":
+            import mss
+            with mss.mss() as sct:
+                mon = self._monitor_actual(sct)
+            self.iniciar_vivo(mon, None)
+        elif accion == "repetir":
+            self.iniciar_vivo(*self.ultima_zona)
+        else:                                       # zona: congelar la pantalla y elegir
+            self.detener_vivo()
+            self.voz.detener()
+            self.ocupado = True
+            self.trabajo += 1
+            self._panel_estaba = self.panel.visible()
+            self.panel.ocultar()
+            self.root.withdraw()
+            self.root.after(250, lambda: self._capturar("zona", self.trabajo))
+
+    def iniciar_vivo(self, mon, caja):
+        self.detener_vivo()
+        if self._overlay_abierto():
+            self.overlay.cerrar()
+        self.ocupado = False
+        self.trabajo += 1
+        self.fuente_actual = "zona" if caja else "pantalla"
+        try:
+            self.vivo = envivo.SesionEnVivo(self, mon, caja)
+        except Exception as e:
+            log.exception("No se pudo iniciar el modo en vivo")
+            self.vivo = None
+            self.estado(f"No se pudo iniciar la traducción en vivo: {e}", error=True)
+            return
+        que = "la zona elegida" if caja else "la pantalla"
+        self.estado(f"● EN VIVO: leyendo {que}… Sigue usando tus programas con normalidad.")
+
+    def detener_vivo(self):
+        if self.vivo is not None:
+            self.vivo.detener()
+            self.vivo = None
+            return True
+        return False
+
+    def _resultado_vivo(self, sesion, bloques, duracion):
+        if sesion is not self.vivo:
+            sesion.procesando = False
+            return
+        nuevos = sesion.resultado(bloques, duracion)
+        if bloques:
+            self.ultimos_bloques = bloques
+        if nuevos:
+            self.historial.agregar(nuevos, sesion.tipo)
+            if self.cfg["voz_auto"]:
+                self.leer(ventanas.texto_de(nuevos))
+        if self.cfg["modo_vista"] == "panel" and bloques and nuevos:
+            self.panel.mostrar(bloques, enfocar=False)
+        que = "zona" if sesion.caja else "pantalla"
+        detalle = self._resumen(bloques) if bloques else "sin texto para traducir"
+        self.estado(f"● EN VIVO ({que}): {detalle} · lectura {duracion:.1f} s.\n"
+                    f"Se actualiza sola cuando el texto cambia.")
+
     def detener(self):
+        if self.detener_vivo():
+            self.trabajo += 1
+            self.voz.detener()
+            self.estado("Traducción en vivo detenida.")
+            return
         algo = self.ocupado or self.selector or self._overlay_abierto() or self.voz.hablando()
         self.trabajo += 1           # cualquier traducción en curso queda descartada
         self.ocupado = False
@@ -404,6 +511,10 @@ class App:
             cerrar_selector()
             if caja[2] - caja[0] > 10 and caja[3] - caja[1] > 10:
                 self.ultima_zona = (mon, caja)
+                if VIVO:
+                    self._restaurar_ventanas()
+                    self.iniciar_vivo(mon, caja)
+                    return
                 self.ocupado = True
                 self._procesar(img, mon, caja, trabajo)
             else:
@@ -602,6 +713,7 @@ class App:
         try:
             if self._hk is not None:
                 self._hk.stop()
+            self.detener_vivo()
             self.voz.detener()
             self.guardar_cfg()
             self.root.destroy()
@@ -637,6 +749,8 @@ def autoprueba():
             lineas.append(f"[{b['idioma']}] {b['original']}  =>  {b['traduccion']}")
         idiomas = {b["idioma"] for b in bloques}
         ok = len(bloques) >= 2 and "en" in idiomas and (fj is None or "ja" in idiomas)
+        if ok and VIVO:
+            ok = autoprueba_vivo(m, lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
     except Exception:
         lineas.append(traceback.format_exc())
@@ -644,6 +758,82 @@ def autoprueba():
     with open(os.path.join(nucleo.BASE, "autoprueba.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lineas))
     os._exit(0 if ok else 1)
+
+
+def autoprueba_vivo(m, lineas):
+    """Prueba real en Windows: una ventana con texto, la traducción en vivo encima,
+    un clic que debe atravesar la capa y un cambio de texto que debe re-traducirse."""
+    import mss
+    lineas.append("--- Prueba EN VIVO ---")
+    app = App(motor=m)
+    app.cfg["modo_vista"] = "superpuesto"
+    r = app.root
+
+    def bombear(segundos, hasta=lambda: False):
+        fin = time.time() + segundos
+        while time.time() < fin:
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.03)
+        return hasta()
+
+    fondo = tk.Toplevel(r)
+    fondo.overrideredirect(True)
+    fondo.geometry("900x220+150+250")
+    fondo.configure(bg="white")
+    clics = []
+    lbl = tk.Label(fondo, text="Welcome to the village, traveler.", font=("Arial", 30),
+                   bg="white", fg="black")
+    lbl.pack(expand=True, fill="both")
+    lbl.bind("<Button-1>", lambda e: clics.append(1))
+    bombear(1.0)
+    with mss.mss() as sct:
+        mon = dict(sct.monitors[1])
+    caja = (150 - mon["left"], 250 - mon["top"], 1050 - mon["left"], 470 - mon["top"])
+    t0 = time.time()
+    app.iniciar_vivo(mon, caja)
+    ok1 = bombear(40, lambda: app.vivo is not None and any(
+        "village" in b["original"].lower() for b in app.vivo.bloques))
+    lineas.append(f"Traducción inicial: {'OK' if ok1 else 'FALLO'} en {time.time() - t0:.1f} s  "
+                  f"{[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+    v = app.vivo
+    lineas.append(f"Capa traspasable: {v.capa.traspasable if v else None} · "
+                  f"excluida de capturas: {v.capa.excluida if v else None}")
+    # ¿la capa aparece en una captura? (debe verse el fondo blanco, no el recuadro negro)
+    with mss.mss() as sct:
+        s = sct.grab({"left": 160, "top": 330, "width": 400, "height": 60})
+    claridad = sum(s.rgb[0::3]) / max(1, len(s.rgb) // 3)
+    lineas.append(f"Brillo bajo la capa en la captura: {claridad:.0f}/255 "
+                  f"({'la capa NO sale en capturas' if claridad > 150 else 'la capa SÍ sale en capturas'})")
+    # clic que debe atravesar la capa
+    try:
+        import ctypes
+        u32 = ctypes.windll.user32
+        cx, cy = lbl.winfo_rootx() + lbl.winfo_width() // 2, lbl.winfo_rooty() + lbl.winfo_height() // 2
+        u32.SetCursorPos(cx, cy)
+        u32.mouse_event(0x0002, 0, 0, 0, 0)
+        u32.mouse_event(0x0004, 0, 0, 0, 0)
+        bombear(1.5, lambda: bool(clics))
+        lineas.append(f"Clic a través de la capa: {'OK (llegó a la ventana de debajo)' if clics else 'NO llegó'}")
+    except Exception as e:
+        lineas.append(f"Clic: no se pudo probar ({e})")
+    # cambio de texto -> debe re-traducirse solo
+    lbl.configure(text="Do you want to save your progress?")
+    t1 = time.time()
+    ok2 = bombear(40, lambda: app.vivo is not None and any(
+        "progress" in b["original"].lower() for b in app.vivo.bloques))
+    lineas.append(f"Actualización automática al cambiar el texto: {'OK' if ok2 else 'FALLO'} "
+                  f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+    # sin cambios no debe volver a leer
+    n = app.vivo.lecturas if app.vivo else 0
+    bombear(3)
+    extra = (app.vivo.lecturas if app.vivo else 0) - n
+    lineas.append(f"Lecturas extra con la pantalla quieta (3 s): {extra}")
+    app.detener()
+    bombear(0.5)
+    lineas.append(f"Detener: {'OK' if app.vivo is None else 'FALLO'}")
+    return ok1 and ok2 and app.vivo is None
 
 
 def main():

@@ -145,15 +145,17 @@ class Panel:
     def visible(self):
         return self.abierto() and self.win.state() != "withdrawn"
 
-    def mostrar(self, bloques):
+    def mostrar(self, bloques, enfocar=True):
         self.bloques = bloques
         if not self.abierto():
             self._crear()
         self.refrescar()
-        self.win.deiconify()
-        self.win.lift()
-        self.win.focus_force()
-        self.txt.focus_set()
+        if self.win.state() == "withdrawn" or enfocar:
+            self.win.deiconify()
+        if enfocar:
+            self.win.lift()
+            self.win.focus_force()
+            self.txt.focus_set()
 
     def _crear(self):
         w = self.win = tk.Toplevel(self.app.root)
@@ -817,10 +819,21 @@ def ventana_ayuda(app):
     w.attributes("-topmost", True)
     app.poner_icono(w)
     at = {a: atajo_legible(app.cfg["atajos"][a]) for a in ACCIONES}
-    texto = f"""ATAJOS GLOBALES (funcionan en cualquier programa)
-  {at['pantalla']:<14} Traducir la pantalla completa
-  {at['zona']:<14} Elegir una zona con el ratón y traducirla
-  {at['repetir']:<14} Volver a traducir la última zona (ideal para subtítulos y juegos)
+    texto = f"""TRADUCCIÓN EN VIVO (Windows)
+  La traducción aparece encima del texto en una capa transparente:
+  los clics y el teclado la ATRAVIESAN, así que sigues usando tu juego,
+  página o programa con normalidad. Cuando el texto cambia (diálogo nuevo,
+  subtítulo, otra página) se vuelve a traducir solo en 1-2 segundos.
+  Si nada cambia, no gasta recursos.
+  · Lo más rápido: elegir solo la zona del texto (cuadro de diálogo,
+    subtítulos) y fijar el idioma (Inglés o Japonés) en vez de "Detectar".
+  · Juegos: usa el modo "ventana sin bordes" (borderless). En pantalla
+    completa exclusiva Windows no deja dibujar nada encima.
+
+ATAJOS GLOBALES (funcionan en cualquier programa)
+  {at['pantalla']:<14} Pantalla completa en vivo (otra vez = apagar)
+  {at['zona']:<14} Elegir una zona con el ratón y traducirla en vivo
+  {at['repetir']:<14} Volver a la última zona en vivo (otra vez = apagar)
   {at['portapapeles']:<14} Traducir lo que copiaste con Ctrl+C (sin leer la pantalla)
   {at['detener']:<14} Detener: cancela, cierra la traducción y calla la voz
 
@@ -837,7 +850,10 @@ HISTORIAL
   Ctrl+C .............. copiar las traducciones seleccionadas
   Supr ................ borrar las seleccionadas
 
-DENTRO DE LA TRADUCCIÓN
+VENTANA PRINCIPAL · "Última traducción"
+  Copiar, Leer en voz alta o Ver texto (panel) de lo último traducido.
+
+TRADUCCIÓN FIJA (solo Mac/Linux, donde no existe el modo en vivo)
   Esc o clic       Cerrar
   Espacio          Alternar entre traducción y texto original
   C                Copiar todo el texto traducido

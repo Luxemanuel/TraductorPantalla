@@ -438,7 +438,9 @@ class Motor:
     def _leer_filas(self, arr, modo, seguir):
         """OCR por líneas + unión de trozos de la misma línea + relectura del inglés."""
         trozos = []
-        for caja, texto, conf in self.lector.readtext(arr, paragraph=False):
+        # Con el idioma fijado en inglés basta un solo lector (más rápido)
+        lector = self.lector_en if modo == "en" else self.lector
+        for caja, texto, conf in lector.readtext(arr, paragraph=False):
             texto = texto.strip()
             if conf < 0.2 or not texto:
                 continue
@@ -453,6 +455,11 @@ class Motor:
                 raise Cancelado()
             if f["jp"] and modo != "en":
                 f["t"] = ESP_ENTRE_JP.sub("", f["t"])
+                continue
+            if modo == "en":                 # ya lo leyó el lector de inglés
+                f["t"] = corregir_ingles(f["t"])
+                continue
+            if modo == "ja":                 # en modo japonés el inglés se descarta
                 continue
             # Releer con el modelo de inglés (más preciso). Se deja margen para no perder
             # la puntuación final, sin invadir los renglones vecinos.

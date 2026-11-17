@@ -11,16 +11,28 @@ CÓMO ABRIRLO
   Si Windows muestra "Windows protegió su PC": Más información >
   Ejecutar de todas formas (sale porque el programa no tiene firma digital).
 
-ATAJOS (funcionan en cualquier programa o juego)
-  Ctrl+Alt+T  traducir la pantalla completa
-  Ctrl+Alt+Z  elegir una zona con el ratón y traducirla
-  Ctrl+Alt+R  repetir la última zona (subtítulos, diálogos)
-  Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
-  Ctrl+Alt+X  detener / cerrar la traducción / callar la voz
+TRADUCCIÓN EN VIVO
+  La traducción aparece encima del texto en una capa transparente que
+  deja pasar los clics y el teclado: sigues usando tu juego, página o
+  programa con normalidad. Cuando el texto cambia (diálogo nuevo,
+  subtítulo, otra página) se vuelve a traducir solo en 1-2 segundos;
+  si nada cambia, no gasta recursos.
 
-DENTRO DE LA TRADUCCIÓN
-  Esc o clic = cerrar · Espacio = ver original · C = copiar
-  L = leer en voz alta · P = ver como texto · H = ocultar la barra
+ATAJOS (funcionan en cualquier programa o juego)
+  Ctrl+Alt+Z  elegir una zona con el ratón y traducirla en vivo  (lo mejor)
+  Ctrl+Alt+T  toda la pantalla en vivo (más lento)  · otra vez = apagar
+  Ctrl+Alt+R  volver a la última zona en vivo        · otra vez = apagar
+  Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
+  Ctrl+Alt+X  detener la traducción en vivo / callar la voz
+
+CONSEJOS PARA QUE VAYA RÁPIDO
+  · Elige solo la zona del texto (cuadro de diálogo, subtítulos), no
+    toda la pantalla.
+  · Si sabes el idioma, márcalo (Inglés o Japonés) en vez de "Detectar
+    solo": lee más rápido.
+  · Juegos: ponlos en "ventana sin bordes" (borderless). En pantalla
+    completa exclusiva Windows no deja dibujar nada encima.
+  · Al abrir el programa tarda unos 10 s en cargar; después ya va fluido.
 
 Inglés y japonés mezclados se traducen a la vez con "Detectar solo".
 En la ventana principal tienes Historial, Mi glosario, Configuración
