@@ -988,14 +988,10 @@ def demostracion():
         with __import__("mss").mss() as sct:
             mon = dict(sct.monitors[1])
         app.iniciar_vivo(mon, (x0, y0, x1, y1))
-    juego.lift()
     narrar("3. La traducción aparece encima, en vivo")
     bombear(15, lambda: app.vivo is not None and bool(app.vivo.bloques))
     bombear(3.0)
     for i in range(len(lineas) - 1):
-        juego.lift()
-        if app.vivo is not None:
-            app.vivo.capa.win.lift()
         narrar("4. Hago clic ATRAVESANDO la traducción: el juego responde normal")
         cx, cy = dialogo.winfo_rootx() + 200, dialogo.winfo_rooty() + 25
         clic(cx, cy)

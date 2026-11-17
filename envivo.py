@@ -157,6 +157,18 @@ class CapaEnVivo:
     def limpiar(self):
         self.c.delete("trad")
 
+    def subir(self):
+        """Mantiene la capa por encima de todo (sin quitarle el foco a nadie)."""
+        if not ES_WINDOWS or not self.existe():
+            return
+        try:
+            import ctypes
+            HWND_TOPMOST, SWP = -1, 0x0001 | 0x0002 | 0x0010   # NOSIZE|NOMOVE|NOACTIVATE
+            ctypes.windll.user32.SetWindowPos(ctypes.c_void_p(hwnd_de(self.win)),
+                                              ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0, SWP)
+        except Exception:
+            pass
+
     def mostrar(self, bloques):
         """bloques con 'caja' en coordenadas del monitor."""
         cfg = self.app.cfg
@@ -191,7 +203,7 @@ class CapaEnVivo:
                     break
                 tam -= 1
             alto_final = max(alto, total)
-            ancho_final = max(x1 - x0, max(f.measure(ln) for ln in lineas))
+            ancho_final = max(x1 - x0, max(f.measure(ln) for ln in lineas)) + int(alto * 0.2)
             if x0 + ancho_final > W - 4:
                 x0 = max(4, W - ancho_final - 8)
             rect = [x0 - 5, y0 - 3, x0 + ancho_final + 5, y0 + alto_final + 3]
@@ -299,6 +311,9 @@ class SesionEnVivo:
         if not self.activa:
             return
         try:
+            self._ticks = getattr(self, "_ticks", 0) + 1
+            if self._ticks % max(1, 2000 // self.intervalo) == 0:
+                self.capa.subir()
             if not self.procesando:
                 img = self._capturar()
                 peq = miniatura(img)
@@ -311,7 +326,7 @@ class SesionEnVivo:
                 elif cambio > self.umbral:
                     if self.cambiando_desde is None:
                         self.cambiando_desde = ahora
-                    if cambio > 0.25 and self.bloques:     # cambió casi todo: quitar lo viejo
+                    if self.firma:          # el texto cambió: quitar la traducción vieja
                         self.capa.limpiar()
                         self.firma = None
                     sigue_cambiando = ahora - self.cambiando_desde > 2.0
