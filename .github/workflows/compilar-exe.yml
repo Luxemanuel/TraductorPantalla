@@ -35,14 +35,24 @@ jobs:
         run: python crear_icono.py
 
       - name: Compilar con PyInstaller
-        run: >
-          pyinstaller --noconfirm --windowed
-          --name "Traductor de Pantalla" --icon icono.ico
-          --collect-all easyocr --collect-all argostranslate --collect-all ctranslate2
-          --collect-all sentencepiece --collect-all stanza --collect-all minisbd
-          --collect-data skimage
-          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
-          traductor_pantalla.py
+        shell: pwsh
+        run: |
+          # Algunas librerías (p. ej. sentencepiece) guardan DLLs en carpetas "*.libs"
+          # que PyInstaller no copia solo: se agregan a mano.
+          $sp = python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+          $extra = @()
+          foreach ($lib in Get-ChildItem $sp -Directory -Filter "*.libs") {
+            Write-Host "Incluyendo $($lib.Name)"
+            $extra += "--add-binary"; $extra += "$($lib.FullName)\*;$($lib.Name)"
+          }
+          pyinstaller --noconfirm --windowed `
+            --name "Traductor de Pantalla" --icon icono.ico `
+            --collect-all easyocr --collect-all argostranslate --collect-all ctranslate2 `
+            --collect-all sentencepiece --collect-all stanza --collect-all minisbd `
+            --collect-data skimage `
+            --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
+            @extra traductor_pantalla.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Copiar modelos, glosario e instrucciones
         shell: pwsh
