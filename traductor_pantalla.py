@@ -101,6 +101,7 @@ class App:
         return ImageTk.PhotoImage(img)
 
     def poner_icono(self, ventana):
+        ventana.es_del_traductor = True       # marca las ventanas propias del programa
         try:
             ventana.iconphoto(False, self._icono)
         except Exception:
@@ -384,11 +385,8 @@ class App:
         self.estado(f"● EN VIVO: leyendo {que}… Sigue usando tus programas con normalidad.")
 
     def _mis_ventanas(self):
-        ventanas_app = [self.root]
-        for w in self.root.winfo_children():
-            if isinstance(w, tk.Toplevel) and (self.vivo is None or w is not self.vivo.capa.win):
-                ventanas_app.append(w)
-        return ventanas_app
+        return [self.root] + [w for w in self.root.winfo_children()
+                              if isinstance(w, tk.Toplevel) and getattr(w, "es_del_traductor", False)]
 
     def _ocultar_mis_ventanas(self, ocultar):
         """Mientras hay traducción en vivo, las ventanas del traductor no salen en las
