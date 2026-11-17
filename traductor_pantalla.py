@@ -379,13 +379,34 @@ class App:
             self.vivo = None
             self.estado(f"No se pudo iniciar la traducción en vivo: {e}", error=True)
             return
+        self._ocultar_mis_ventanas(True)
         que = "la zona elegida" if caja else "la pantalla"
         self.estado(f"● EN VIVO: leyendo {que}… Sigue usando tus programas con normalidad.")
+
+    def _mis_ventanas(self):
+        ventanas_app = [self.root]
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel) and (self.vivo is None or w is not self.vivo.capa.win):
+                ventanas_app.append(w)
+        return ventanas_app
+
+    def _ocultar_mis_ventanas(self, ocultar):
+        """Mientras hay traducción en vivo, las ventanas del traductor no salen en las
+        capturas (así no se lee a sí mismo si quedan encima de la zona)."""
+        if not envivo.ES_WINDOWS:
+            return
+        for w in self._mis_ventanas():
+            try:
+                if w.winfo_ismapped() or not ocultar:
+                    envivo.excluir_de_captura(w, ocultar)
+            except tk.TclError:
+                pass
 
     def detener_vivo(self):
         if self.vivo is not None:
             self.vivo.detener()
             self.vivo = None
+            self._ocultar_mis_ventanas(False)
             return True
         return False
 
@@ -402,6 +423,8 @@ class App:
                 self.leer(ventanas.texto_de(nuevos))
         if self.cfg["modo_vista"] == "panel" and bloques and nuevos:
             self.panel.mostrar(bloques, enfocar=False)
+        if sesion.lecturas <= 1 or nuevos:
+            self._ocultar_mis_ventanas(True)     # por si se abrió una ventana nueva
         que = "zona" if sesion.caja else "pantalla"
         detalle = self._resumen(bloques) if bloques else "sin texto para traducir"
         self.estado(f"● EN VIVO ({que}): {detalle} · lectura {duracion:.1f} s.\n"
@@ -794,7 +817,10 @@ def autoprueba_vivo(m, lineas):
     t0 = time.time()
     app.iniciar_vivo(mon, caja)
     ok1 = bombear(40, lambda: app.vivo is not None and any(
-        "village" in b["original"].lower() for b in app.vivo.bloques))
+        "welcome to the village" in b["original"].lower() for b in app.vivo.bloques))
+    propio = [b["original"] for b in (app.vivo.bloques if app.vivo else []) if "ctrl" in b["original"].lower()]
+    lineas.append(f"¿Leyó sus propias ventanas?: {'SÍ ' + str(propio) if propio else 'no (bien)'}")
+    ok1 = ok1 and not propio
     lineas.append(f"Traducción inicial: {'OK' if ok1 else 'FALLO'} en {time.time() - t0:.1f} s  "
                   f"{[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
     v = app.vivo
@@ -822,7 +848,7 @@ def autoprueba_vivo(m, lineas):
     lbl.configure(text="Do you want to save your progress?")
     t1 = time.time()
     ok2 = bombear(40, lambda: app.vivo is not None and any(
-        "progress" in b["original"].lower() for b in app.vivo.bloques))
+        "do you want to save your progress" in b["original"].lower() for b in app.vivo.bloques))
     lineas.append(f"Actualización automática al cambiar el texto: {'OK' if ok2 else 'FALLO'} "
                   f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
     # sin cambios no debe volver a leer

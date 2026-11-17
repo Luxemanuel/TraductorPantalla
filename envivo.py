@@ -58,14 +58,16 @@ def hacer_traspasable(win):
         return False
 
 
-def excluir_de_captura(win):
-    """La ventana se ve en el monitor pero no aparece en capturas (Windows 10 2004+)."""
+def excluir_de_captura(win, excluir=True):
+    """La ventana se ve en el monitor pero no aparece en capturas (Windows 10 2004+).
+    Con excluir=False vuelve a la normalidad."""
     if not ES_WINDOWS:
         return False
     try:
         import ctypes
-        WDA_EXCLUDEFROMCAPTURE = 0x11
-        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_de(win), WDA_EXCLUDEFROMCAPTURE))
+        WDA_NONE, WDA_EXCLUDEFROMCAPTURE = 0x0, 0x11
+        modo = WDA_EXCLUDEFROMCAPTURE if excluir else WDA_NONE
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_de(win), modo))
     except Exception:
         log.exception("SetWindowDisplayAffinity")
         return False
