@@ -916,6 +916,7 @@ def demostracion():
     juego.title("Aventura (juego de ejemplo)")
     juego.geometry(f"{gw}x{gh}+{gx}+{gy}")
     juego.configure(bg="#1d2b3a")
+    juego.attributes("-topmost", True)    # que ninguna otra ventana del servidor lo tape
     tk.Label(juego, text="⚔  THE LOST KINGDOM", font=("Georgia", 22, "bold"), fg="#ffd27a",
              bg="#1d2b3a").pack(pady=(18, 6))
     tk.Label(juego, text="🌲🏠🌲🌲🏠🌲", font=("Segoe UI Emoji", 34), bg="#1d2b3a").pack(pady=6)
@@ -987,10 +988,14 @@ def demostracion():
         with __import__("mss").mss() as sct:
             mon = dict(sct.monitors[1])
         app.iniciar_vivo(mon, (x0, y0, x1, y1))
+    juego.lift()
     narrar("3. La traducción aparece encima, en vivo")
     bombear(15, lambda: app.vivo is not None and bool(app.vivo.bloques))
     bombear(3.0)
     for i in range(len(lineas) - 1):
+        juego.lift()
+        if app.vivo is not None:
+            app.vivo.capa.win.lift()
         narrar("4. Hago clic ATRAVESANDO la traducción: el juego responde normal")
         cx, cy = dialogo.winfo_rootx() + 200, dialogo.winfo_rooty() + 25
         clic(cx, cy)
@@ -1010,7 +1015,7 @@ def demostracion():
     narrar("Listo: sin bloquear tu juego, sin internet, en 1-2 segundos por cambio")
     bombear(4)
     with open(os.path.join(nucleo.BASE, "demo_fin"), "w") as fh:
-        fh.write("1")
+        fh.write(f"avances={paso[0]}")
     os._exit(0)
 
 

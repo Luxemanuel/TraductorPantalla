@@ -106,6 +106,7 @@ jobs:
           Start-Sleep 2
           New-Item "$d\demo_grabando" -ItemType File | Out-Null
           $t = 0; while (-not (Test-Path "$d\demo_fin") -and $t -lt 110) { Start-Sleep 1; $t++ }
+          if (Test-Path "$d\demo_fin") { Write-Host "Demo: $(Get-Content "$d\demo_fin")" }
           Start-Sleep 1
           Stop-Process -Id $ff.Id -ErrorAction SilentlyContinue
           Start-Sleep 2
