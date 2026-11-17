@@ -120,7 +120,7 @@ class CapaEnVivo:
         w.deiconify()
         w.update_idletasks()
         self.traspasable = hacer_traspasable(w)
-        self.excluida = excluir_de_captura(w)
+        self.excluida = False if getattr(app, "sin_exclusion", False) else excluir_de_captura(w)
         self.dibujar_marco()
 
     def existe(self):
@@ -377,3 +377,52 @@ class SesionEnVivo:
                 self._sct.close()
             except Exception:
                 pass
+
+
+def capturar_ventana(win, region):
+    """Copia el contenido de UNA ventana (aunque haya otras encima) y recorta 'region'
+    (coordenadas de pantalla). Se usa en la demostración grabada."""
+    import ctypes
+    import ctypes.wintypes as wt
+    u32, g32 = ctypes.windll.user32, ctypes.windll.gdi32
+    vp = ctypes.c_void_p
+    u32.GetWindowDC.restype = vp
+    u32.GetWindowDC.argtypes = [vp]
+    u32.ReleaseDC.argtypes = [vp, vp]
+    u32.PrintWindow.argtypes = [vp, vp, ctypes.c_uint]
+    u32.GetWindowRect.argtypes = [vp, ctypes.POINTER(wt.RECT)]
+    g32.CreateCompatibleDC.restype = vp
+    g32.CreateCompatibleDC.argtypes = [vp]
+    g32.CreateCompatibleBitmap.restype = vp
+    g32.CreateCompatibleBitmap.argtypes = [vp, ctypes.c_int, ctypes.c_int]
+    g32.SelectObject.restype = vp
+    g32.SelectObject.argtypes = [vp, vp]
+    g32.DeleteObject.argtypes = [vp]
+    g32.DeleteDC.argtypes = [vp]
+    g32.GetDIBits.argtypes = [vp, vp, ctypes.c_uint, ctypes.c_uint, vp, vp, ctypes.c_uint]
+
+    class BIH(ctypes.Structure):
+        _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                    ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                    ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG),
+                    ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+    hwnd = hwnd_de(win)
+    rc = wt.RECT()
+    u32.GetWindowRect(hwnd, ctypes.byref(rc))
+    w, h = rc.right - rc.left, rc.bottom - rc.top
+    hdc = u32.GetWindowDC(hwnd)
+    mdc = g32.CreateCompatibleDC(hdc)
+    bmp = g32.CreateCompatibleBitmap(hdc, w, h)
+    viejo = g32.SelectObject(mdc, bmp)
+    u32.PrintWindow(hwnd, mdc, 2)
+    bi = BIH()
+    bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(BIH), w, -h, 1, 32
+    buf = ctypes.create_string_buffer(w * h * 4)
+    g32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0)
+    g32.SelectObject(mdc, viejo)
+    g32.DeleteObject(bmp)
+    g32.DeleteDC(mdc)
+    u32.ReleaseDC(hwnd, hdc)
+    img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+    x0, y0 = region["left"] - rc.left, region["top"] - rc.top
+    return img.crop((x0, y0, x0 + region["width"], y0 + region["height"]))

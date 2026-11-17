@@ -374,7 +374,8 @@ class App:
         self.trabajo += 1
         self.fuente_actual = "zona" if caja else "pantalla"
         try:
-            self.vivo = envivo.SesionEnVivo(self, mon, caja)
+            self.vivo = envivo.SesionEnVivo(self, mon, caja,
+                                            capturar=getattr(self, "capturar_vivo", None))
         except Exception as e:
             log.exception("No se pudo iniciar el modo en vivo")
             self.vivo = None
@@ -391,7 +392,7 @@ class App:
     def _ocultar_mis_ventanas(self, ocultar):
         """Mientras hay traducción en vivo, las ventanas del traductor no salen en las
         capturas (así no se lee a sí mismo si quedan encima de la zona)."""
-        if not envivo.ES_WINDOWS:
+        if not envivo.ES_WINDOWS or getattr(self, "sin_exclusion", False):
             return
         for w in self._mis_ventanas():
             try:
@@ -860,8 +861,163 @@ def autoprueba_vivo(m, lineas):
     return ok1 and ok2 and app.vivo is None
 
 
+def demostracion():
+    """Graba-ble: un 'juego' de ejemplo traducido en vivo, manejado con el ratón real.
+    Coordina con el flujo de GitHub mediante los archivos demo_listo / demo_grabando."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    nucleo.iniciar_registro()
+    m = Motor(avisar=lambda x: None)
+    m.cargar()
+    app = App(motor=m)
+    app.cfg.update({"modo_vista": "superpuesto", "idioma_origen": "auto", "voz_auto": False})
+    r = app.root
+    sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
+
+    def bombear(seg, hasta=lambda: False):
+        fin = time.time() + seg
+        while time.time() < fin:
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.02)
+        return hasta()
+
+    def mover(x, y, seg=0.7):
+        import ctypes.wintypes as wt
+        p = wt.POINT()
+        u32.GetCursorPos(ctypes.byref(p))
+        x0, y0, pasos = p.x, p.y, max(1, int(seg / 0.02))
+        for i in range(1, pasos + 1):
+            t = i / pasos
+            t = t * t * (3 - 2 * t)
+            u32.SetCursorPos(int(x0 + (x - x0) * t), int(y0 + (y - y0) * t))
+            bombear(0.02)
+
+    def clic(x, y):
+        mover(x, y)
+        u32.mouse_event(0x0002, 0, 0, 0, 0)
+        bombear(0.08)
+        u32.mouse_event(0x0004, 0, 0, 0, 0)
+        bombear(0.3)
+
+    def arrastrar(x0, y0, x1, y1):
+        mover(x0, y0)
+        u32.mouse_event(0x0002, 0, 0, 0, 0)
+        bombear(0.15)
+        mover(x1, y1, 1.2)
+        bombear(0.2)
+        u32.mouse_event(0x0004, 0, 0, 0, 0)
+        bombear(0.3)
+
+    # --- "juego" de ejemplo ---
+    gx, gy, gw, gh = 15, 60, 560, 450
+    juego = tk.Toplevel(r)
+    juego.title("Aventura (juego de ejemplo)")
+    juego.geometry(f"{gw}x{gh}+{gx}+{gy}")
+    juego.configure(bg="#1d2b3a")
+    tk.Label(juego, text="⚔  THE LOST KINGDOM", font=("Georgia", 22, "bold"), fg="#ffd27a",
+             bg="#1d2b3a").pack(pady=(18, 6))
+    tk.Label(juego, text="🌲🏠🌲🌲🏠🌲", font=("Segoe UI Emoji", 34), bg="#1d2b3a").pack(pady=6)
+    caja = tk.Frame(juego, bg="#0d1520", highlightthickness=3, highlightbackground="#c9d6ff")
+    caja.pack(fill="x", padx=24, pady=(14, 8), ipady=6)
+    quien = tk.Label(caja, font=("Segoe UI", 15, "bold"), fg="#ffd27a", bg="#0d1520", anchor="w")
+    quien.pack(fill="x", padx=14, pady=(8, 0))
+    dialogo = tk.Label(caja, font=("Segoe UI", 18), fg="white", bg="#0d1520", anchor="w",
+                       justify="left", wraplength=480, height=2)
+    dialogo.pack(fill="x", padx=14, pady=(2, 8))
+    tk.Label(juego, text="(click the dialog to continue)", font=("Segoe UI", 11, "italic"),
+             fg="#8fa3b8", bg="#1d2b3a").pack()
+    lineas = [("Old Man", "Welcome to the village, traveler."),
+              ("Old Man", "The forest to the north is dangerous at night."),
+              ("Old Man", "Take this sword. It belonged to my son."),
+              ("お知らせ", "魔法の剣を手に入れた！"),
+              ("Old Man", "Do you want to save your progress?")]
+    paso = [0]
+
+    def avanzar(_=None):
+        paso[0] = min(paso[0] + 1, len(lineas) - 1)
+        q, t = lineas[paso[0]]
+        quien.configure(text=q)
+        dialogo.configure(text=t)
+    for wdg in (caja, quien, dialogo):
+        wdg.bind("<Button-1>", avanzar)
+    paso[0] = -1
+    avanzar()
+
+    # --- narración (fuera de la zona) ---
+    nar = tk.Toplevel(r)
+    nar.overrideredirect(True)
+    nar.attributes("-topmost", True)
+    nar.geometry(f"{sw}x54+0+{sh - 100}")
+    nar.configure(bg="#4a0816")
+    txt_nar = tk.Label(nar, font=("Segoe UI", 17, "bold"), fg="#f5eedc", bg="#4a0816")
+    txt_nar.pack(expand=True)
+
+    def narrar(t):
+        txt_nar.configure(text=t)
+        bombear(0.05)
+
+    r.geometry(f"+{min(gx + gw + 15, sw - 470)}+10")
+    # La capa debe verse en el video: no se excluye de las capturas, y el programa
+    # lee el juego directamente desde su ventana.
+    app.sin_exclusion = True
+    app.capturar_vivo = lambda: envivo.capturar_ventana(juego, app.vivo.region)
+    bombear(1.5)
+    with open(os.path.join(nucleo.BASE, "demo_listo"), "w") as fh:
+        fh.write("1")
+    bombear(60, lambda: os.path.exists(os.path.join(nucleo.BASE, "demo_grabando")))
+    bombear(1.0)
+
+    narrar("Demostración: Traductor de Pantalla  ·  inglés / japonés → español en vivo")
+    bombear(2.5)
+    narrar("1. Pulso «Elegir zona en vivo» (o Ctrl+Alt+Z)")
+    b = app.botones["zona"][0]
+    clic(b.winfo_rootx() + b.winfo_width() // 2, b.winfo_rooty() + b.winfo_height() // 2)
+    bombear(10, lambda: app.selector is not None)
+    bombear(0.8)
+    narrar("2. Arrastro el ratón sobre el cuadro de diálogo")
+    bombear(0.6)
+    x0, y0 = caja.winfo_rootx() - 6, caja.winfo_rooty() - 6
+    x1, y1 = x0 + caja.winfo_width() + 12, y0 + caja.winfo_height() + 12
+    if app.selector is not None:
+        arrastrar(x0, y0, x1, y1)
+    else:
+        app.ultima_zona = None
+        with __import__("mss").mss() as sct:
+            mon = dict(sct.monitors[1])
+        app.iniciar_vivo(mon, (x0, y0, x1, y1))
+    narrar("3. La traducción aparece encima, en vivo")
+    bombear(15, lambda: app.vivo is not None and bool(app.vivo.bloques))
+    bombear(3.0)
+    for i in range(len(lineas) - 1):
+        narrar("4. Hago clic ATRAVESANDO la traducción: el juego responde normal")
+        cx, cy = dialogo.winfo_rootx() + 200, dialogo.winfo_rooty() + 25
+        clic(cx, cy)
+        narrar("5. El texto cambió → se traduce solo, sin pulsar nada")
+        bombear(2.5)
+        bombear(3.5)
+    narrar("6. Ctrl+Alt+X para detener")
+    mover(gx + gw // 2, gy + gh + 40)
+    for vk in (0x11, 0x12, 0x58):
+        u32.keybd_event(vk, 0, 0, 0)
+    bombear(0.1)
+    for vk in (0x58, 0x12, 0x11):
+        u32.keybd_event(vk, 0, 2, 0)
+    bombear(1.5)
+    if app.vivo is not None:
+        app.detener()
+    narrar("Listo: sin bloquear tu juego, sin internet, en 1-2 segundos por cambio")
+    bombear(4)
+    with open(os.path.join(nucleo.BASE, "demo_fin"), "w") as fh:
+        fh.write("1")
+    os._exit(0)
+
+
 def main():
     nucleo.iniciar_registro()
+    if "--demo" in sys.argv:
+        demostracion()
     if "--autoprueba" in sys.argv:
         autoprueba()
     # Evitar abrirlo dos veces (los atajos chocarían)

@@ -90,6 +90,38 @@ jobs:
           Remove-Item "$d\registro.txt", "$d\config.json" -ErrorAction SilentlyContinue
           if (-not $vivo) { Write-Error "El programa se cerró solo al arrancar"; exit 1 }
 
+      - name: Grabar video de demostración
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ARGOS_PACKAGES_DIR: ""
+          EASYOCR_MODULE_PATH: ""
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          $d = "dist\Traductor de Pantalla"
+          Remove-Item "$d\demo_*" -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -ArgumentList "--demo" -PassThru
+          $t = 0; while (-not (Test-Path "$d\demo_listo") -and $t -lt 120) { Start-Sleep 1; $t++ }
+          $ff = Start-Process ffmpeg -ArgumentList "-y -f gdigrab -framerate 20 -draw_mouse 1 -i desktop -t 120 -c:v libx264 -preset ultrafast -pix_fmt yuv420p demo_crudo.mkv" -PassThru -NoNewWindow
+          Start-Sleep 2
+          New-Item "$d\demo_grabando" -ItemType File | Out-Null
+          $t = 0; while (-not (Test-Path "$d\demo_fin") -and $t -lt 110) { Start-Sleep 1; $t++ }
+          Start-Sleep 1
+          Stop-Process -Id $ff.Id -ErrorAction SilentlyContinue
+          Start-Sleep 2
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          ffmpeg -y -i demo_crudo.mkv -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart demo.mp4
+          Remove-Item "$d\demo_*", "$d\registro.txt", "$d\config.json", "$d\historial.json" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory demo_rama | Out-Null
+          Copy-Item demo.mp4 demo_rama\demo.mp4
+          Set-Location demo_rama
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add demo.mp4
+          git commit -q -m "Video de demostración"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" HEAD:demo
+
       - name: Comprimir
         shell: pwsh
         run: 7z a -tzip -mx=5 TraductorPantalla-Windows.zip "dist\Traductor de Pantalla"
