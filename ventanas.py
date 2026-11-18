@@ -890,7 +890,14 @@ SUBTÍTULOS
   · De voz: escucha lo que suena en tus altavoces y muestra lo que dicen,
     traducido, abajo de la pantalla. Sirve aunque no haya texto en pantalla.
 
+ANCLAR A UN PROGRAMA
+  Estando en el juego, pulsa {at['anclar']} y elige la zona (o Enter para toda la
+  ventana). La traducción sigue a esa ventana: si abres otro programa se
+  oculta y al volver todo sigue traducido. El texto ya traducido se recuerda
+  aunque el fondo se mueva o una letra quede tapada.
+
 ATAJOS GLOBALES (funcionan en cualquier programa)
+  {at['anclar']:<14} Anclar al programa que estás usando
   {at['zona']:<14} Elegir una zona y traducirla en vivo
   {at['subtitulos']:<14} Subtítulos de pantalla (elegir la franja)
   {at['voz']:<14} Subtítulos de voz (otra vez = apagar)

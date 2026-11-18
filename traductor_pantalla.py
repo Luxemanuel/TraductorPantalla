@@ -139,7 +139,8 @@ class App:
         ttk.Label(f, text="Inglés / Japonés  →  el idioma que elijas").pack(anchor="w", pady=(0, 10))
 
         self.botones = {}
-        textos = ((("zona", "Elegir zona en vivo"), ("subtitulos", "Subtítulos de pantalla"),
+        textos = ((("anclar", "Anclar a un programa"), ("zona", "Elegir zona en vivo"),
+                   ("subtitulos", "Subtítulos de pantalla"),
                    ("voz", "Subtítulos de voz (audio)"), ("pantalla", "Pantalla completa en vivo"),
                    ("repetir", "Volver a la última zona"), ("portapapeles", "Traducir lo copiado"))
                   if VIVO else
@@ -227,8 +228,9 @@ class App:
 
     def _actualizar_botones(self):
         activo = self.listo and not self.ocupado
-        for accion in ("pantalla", "zona", "portapapeles"):
-            self.botones[accion][0].state(["!disabled"] if activo else ["disabled"])
+        for accion in ("pantalla", "zona", "portapapeles", "anclar"):
+            if accion in self.botones:
+                self.botones[accion][0].state(["!disabled"] if activo else ["disabled"])
         self.botones["repetir"][0].state(["!disabled"] if activo and self.ultima_zona else ["disabled"])
         hay_algo = (self.ocupado or self.voz.hablando() or self._overlay_abierto() or self.selector
                     or self.vivo is not None or self.voz_subs is not None)
@@ -327,6 +329,10 @@ class App:
                             self.barra_voz.estado(texto if len(texto) < 90 else texto[:87] + "…")
                         if not sesion.activo:
                             self.detener_voz()
+                elif tipo == "vivo_cerrada":
+                    if dato is self.vivo:
+                        self.detener_vivo()
+                        self.estado("El programa anclado se cerró: traducción detenida.")
                 elif tipo == "vivo_error":
                     sesion, msg = dato
                     sesion.error()
@@ -400,7 +406,17 @@ class App:
                 mon = self._monitor_actual(sct)
             self.iniciar_vivo(mon, None)
         elif accion == "repetir":
-            self.iniciar_vivo(*self.ultima_zona, estilo=self.ultimo_estilo)
+            mon, caja = self.ultima_zona
+            hw = getattr(self, "ultima_ventana", None)
+            if hw:
+                rect = envivo.rect_cliente(hw)
+                if rect is None:
+                    self.estado("El programa anclado ya no está abierto.")
+                    return
+                mon = rect
+            self.iniciar_vivo(mon, caja, estilo=self.ultimo_estilo, ventana=hw)
+        elif accion == "anclar":
+            self._anclar()
         else:                                       # zona / subtítulos: congelar y elegir
             self._estilo_zona = "barra" if accion == "subtitulos" else "palabras"
             self.detener_vivo()
@@ -412,16 +428,17 @@ class App:
             self.root.withdraw()
             self.root.after(250, lambda: self._capturar("zona", self.trabajo))
 
-    def iniciar_vivo(self, mon, caja, estilo="palabras"):
+    def iniciar_vivo(self, mon, caja, estilo="palabras", ventana=None):
         self.detener_vivo()
         self.ultimo_estilo = estilo
+        self.ultima_ventana = ventana
         if self._overlay_abierto():
             self.overlay.cerrar()
         self.ocupado = False
         self.trabajo += 1
         self.fuente_actual = "zona" if caja else "pantalla"
         try:
-            self.vivo = envivo.SesionEnVivo(self, mon, caja, estilo=estilo,
+            self.vivo = envivo.SesionEnVivo(self, mon, caja, estilo=estilo, ventana=ventana,
                                             capturar=getattr(self, "capturar_vivo", None))
         except Exception as e:
             log.exception("No se pudo iniciar el modo en vivo")
@@ -430,6 +447,8 @@ class App:
             return
         self._ocultar_mis_ventanas(True)
         que = "los subtítulos" if estilo == "barra" else ("la zona elegida" if caja else "la pantalla")
+        if ventana:
+            que += f" de «{self.vivo.titulo[:40]}» (anclado: se oculta si cambias de programa)"
         self.estado(f"● EN VIVO: leyendo {que}… Sigue usando tus programas con normalidad.")
 
     def _mis_ventanas(self):
@@ -456,11 +475,11 @@ class App:
             return True
         return False
 
-    def _resultado_vivo(self, sesion, bloques, duracion):
+    def _resultado_vivo(self, sesion, bloques, nuevos, duracion):
         if sesion is not self.vivo:
             sesion.procesando = False
             return
-        nuevos = sesion.resultado(bloques, duracion)
+        nuevos = sesion.resultado(bloques, nuevos, duracion)
         if bloques:
             self.ultimos_bloques = bloques
         if nuevos:
@@ -472,6 +491,8 @@ class App:
         if sesion.lecturas <= 1 or nuevos:
             self._ocultar_mis_ventanas(True)     # por si se abrió una ventana nueva
         que = {"subtitulos": "subtítulos", "zona": "zona", "pantalla": "pantalla"}[sesion.tipo]
+        if sesion.ventana:
+            que += f" de {sesion.titulo[:30]}"
         detalle = self._resumen(bloques) if bloques else "sin texto para traducir"
         leer, trad = self.motor.tiempos
         self.estado(f"● EN VIVO ({que}): {detalle}\nlectura {leer:.2f} s + traducción {trad:.2f} s · "
@@ -676,7 +697,65 @@ class App:
         else:
             self._procesar(img, mon, None, trabajo)
 
-    def _elegir_zona(self, img, mon, trabajo):
+    # ---------- anclar a un programa ----------
+    def _anclar(self):
+        if not envivo.ES_WINDOWS:
+            self.estado("Anclar a un programa solo funciona en Windows.")
+            return
+        propias = {envivo.hwnd_de(w) for w in self._mis_ventanas()}
+        hw = envivo.ventana_activa()
+        if hw is None or hw in propias:
+            # Se pulsó el botón: esperar a que el usuario haga clic en el programa
+            self.estado("Haz clic en la ventana del programa o juego que quieres traducir…")
+            self._esperar_ventana(time.time() + 20, propias)
+            return
+        self._anclar_a(hw)
+
+    def _esperar_ventana(self, limite, propias):
+        hw = envivo.ventana_activa()
+        if hw and hw not in propias and envivo.rect_cliente(hw):
+            self._anclar_a(hw)
+            return
+        if time.time() > limite:
+            self.estado("No elegiste ningún programa. Vuelve a intentarlo.")
+            return
+        self.root.after(200, lambda: self._esperar_ventana(limite, propias))
+
+    def _anclar_a(self, hw):
+        rect = envivo.rect_cliente(hw)
+        if not rect:
+            self.estado("No pude usar esa ventana (¿está minimizada?).", error=True)
+            return
+        self.detener_vivo()
+        self.voz.detener()
+        self.ocupado = True
+        self.trabajo += 1
+        trabajo = self.trabajo
+        self._estilo_zona = "palabras"
+        self._panel_estaba = self.panel.visible()
+        self.panel.ocultar()
+        self.root.withdraw()
+
+        def capturar():
+            if trabajo != self.trabajo:
+                return
+            try:
+                import mss
+                with mss.mss() as sct:
+                    shot = sct.grab(rect)
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                if img.size != (rect["width"], rect["height"]):
+                    img = img.resize((rect["width"], rect["height"]), Image.LANCZOS)
+            except Exception as e:
+                log.exception("Captura de la ventana")
+                self.ocupado = False
+                self._restaurar_ventanas()
+                self.estado(f"No pude capturar la ventana: {e}", error=True)
+                return
+            self._elegir_zona(img, rect, trabajo, ventana=hw)
+        self.root.after(250, capturar)
+
+    def _elegir_zona(self, img, mon, trabajo, ventana=None):
         self.ocupado = False          # mientras eliges, no hay nada procesándose
         w = self.selector = tk.Toplevel(self.root)
         w.overrideredirect(True)
@@ -689,6 +768,8 @@ class App:
         c.create_image(0, 0, image=foto, anchor="nw")
         c.foto = foto
         aviso = "Arrastra con el ratón para elegir la zona   ·   Esc o clic derecho para cancelar"
+        if ventana:
+            aviso = "Arrastra para elegir una zona  ·  Enter = toda la ventana  ·  Esc cancelar"
         tam = max(14, self.fuente_titulo.actual("size"))
         c.create_rectangle(mon["width"] // 2 - 380, 14, mon["width"] // 2 + 380, 14 + tam * 3,
                            fill="#111", outline="#ffd400")
@@ -723,7 +804,7 @@ class App:
                 self.ultima_zona = (mon, caja)
                 if VIVO:
                     self._restaurar_ventanas()
-                    self.iniciar_vivo(mon, caja, estilo=self._estilo_zona)
+                    self.iniciar_vivo(mon, caja, estilo=self._estilo_zona, ventana=ventana)
                     return
                 self.ocupado = True
                 self._procesar(img, mon, caja, trabajo)
@@ -748,6 +829,14 @@ class App:
         c.bind("<ButtonRelease-1>", arriba)
         c.bind("<Button-3>", cancelar)
         w.bind("<Escape>", cancelar)
+
+        def toda(_=None):
+            cerrar_selector()
+            self.ultima_zona = (mon, None)
+            self._restaurar_ventanas()
+            self.iniciar_vivo(mon, None, estilo=self._estilo_zona, ventana=ventana)
+        if ventana:
+            w.bind("<Return>", toda)
         w.focus_force()
         w.after(120, w.focus_force)
 
@@ -1003,6 +1092,8 @@ def autoprueba():
         ok = ok_lector and ok_japones and ok_linea and ok_offline and ok_voz
         if ok and VIVO:
             ok = autoprueba_vivo(m, lineas)
+        if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_anclado(m, lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
     except Exception:
         lineas.append(traceback.format_exc())
@@ -1049,6 +1140,87 @@ def autoprueba_voz(m, cfg, lineas):
     ok = "village" in texto and "forest" in texto and texto.count("village") == 1
     lineas.append(f"VOZ: {'OK' if ok else 'FALLO'}")
     return ok
+
+
+def autoprueba_anclado(m, lineas):
+    """Windows: anclar a una ventana, fondo animado, mover la ventana, otro programa delante."""
+    import random
+    import subprocess
+    lineas.append("--- Prueba ANCLADO A UN PROGRAMA ---")
+    llamadas = []
+    original = m.traducir_lote
+    m.traducir_lote = lambda items, destino=None: (llamadas.append([t for t, _ in items]),
+                                                   original(items, destino))[1]
+    app = App(motor=m)
+    app.cfg["modo_vista"] = "superpuesto"
+    r = app.root
+
+    def bombear(segundos, hasta=lambda: False, cada=None):
+        fin = time.time() + segundos
+        while time.time() < fin:
+            if cada:
+                cada()
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.05)
+        return hasta()
+
+    juego = tk.Toplevel(r)
+    juego.title("Juego de prueba")
+    juego.geometry("900x220+150+250")
+    lbl = tk.Label(juego, text="Welcome to the village, traveler.", font=("Arial", 30), bg="white", fg="black")
+    lbl.pack(expand=True, fill="both", padx=0, pady=0)
+    caja = tk.Frame(lbl, bg="#3366aa", width=120, height=40)
+    caja.place(x=760, y=160)
+    bombear(1.0)
+    juego.lift()
+    juego.focus_force()
+    bombear(0.8)
+    hw = envivo.hwnd_de(juego)
+    app.iniciar_vivo(envivo.rect_cliente(hw), None, ventana=hw)
+    t = time.time()
+    ok1 = bombear(30, lambda: app.vivo is not None and any("village" in b["original"].lower() for b in app.vivo.bloques))
+    lineas.append(f"Anclado y traducido: {'OK' if ok1 else 'FALLO'} en {time.time() - t:.1f} s "
+                  f"{[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+    # fondo animado: un recuadro que cambia de color y de lugar sin parar
+    n0 = len(llamadas)
+    lecturas0 = app.vivo.lecturas if app.vivo else 0
+
+    def animar():
+        caja.configure(bg="#%06x" % random.randint(0, 0xFFFFFF))
+        caja.place(x=random.randint(700, 780), y=random.randint(150, 170))
+    bombear(5, cada=animar)
+    extra = len(llamadas) - n0
+    lecturas = (app.vivo.lecturas if app.vivo else 0) - lecturas0
+    ok2 = extra == 0 and app.vivo is not None and bool(app.vivo.bloques)
+    lineas.append(f"Fondo animado 5 s: {lecturas} lecturas, {extra} traducciones nuevas, sigue visible: "
+                  f"{bool(app.vivo and app.vivo.bloques)} → {'OK' if ok2 else 'FALLO'}")
+    # mover la ventana: la capa la sigue
+    juego.geometry("+320+330")
+    bombear(1.5)
+    rect = envivo.rect_cliente(hw)
+    ok3 = app.vivo is not None and app.vivo.capa.mon["left"] == rect["left"] and app.vivo.capa.mon["top"] == rect["top"]
+    lineas.append(f"Mover la ventana: la traducción la sigue → {'OK' if ok3 else 'FALLO'}")
+    # otro programa delante: se oculta; al volver, reaparece sin retraducir
+    n1 = len(llamadas)
+    bloc = subprocess.Popen(["notepad.exe"])
+    oculto = bombear(8, lambda: app.vivo is not None and not getattr(app.vivo.capa, "_visible", True))
+    lineas.append(f"Otro programa delante: {'se ocultó (OK)' if oculto else 'NO se ocultó'}")
+    bloc.kill()
+    bombear(0.8)
+    juego.lift()
+    juego.focus_force()
+    vuelve = bombear(8, lambda: app.vivo is not None and getattr(app.vivo.capa, "_visible", True)
+                     and bool(app.vivo.bloques))
+    extra2 = len(llamadas) - n1
+    lineas.append(f"Al volver al programa: {'todo sigue traducido (OK)' if vuelve else 'FALLO'}, "
+                  f"traducciones nuevas: {extra2}")
+    app.detener()
+    bombear(0.5)
+    m.traducir_lote = original
+    juego.destroy()
+    return ok1 and ok2 and ok3 and oculto and vuelve and extra2 == 0
 
 
 def autoprueba_vivo(m, lineas):

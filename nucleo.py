@@ -28,7 +28,6 @@ else:
 RUTA_MODELOS = os.path.join(BASE, "modelos")
 if os.path.isdir(RUTA_MODELOS):
     os.environ["ARGOS_PACKAGES_DIR"] = os.path.join(RUTA_MODELOS, "argos")
-    os.environ["EASYOCR_MODULE_PATH"] = os.path.join(RUTA_MODELOS, "easyocr")
 RUTA_CONFIG = os.path.join(BASE, "config.json")
 RUTA_GLOSARIO = os.path.join(BASE, "glosario.json")
 RUTA_REGISTRO = os.path.join(BASE, "registro.txt")
@@ -90,6 +89,7 @@ ACCIONES = {
     # clave: (nombre visible, atajo por defecto)
     "pantalla": ("Traducir pantalla completa", {"ctrl": True, "alt": True, "shift": False, "tecla": "T"}),
     "zona": ("Traducir una zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "Z"}),
+    "anclar": ("Anclar a un programa", {"ctrl": True, "alt": True, "shift": False, "tecla": "W"}),
     "subtitulos": ("Subtítulos de pantalla (zona)", {"ctrl": True, "alt": True, "shift": False, "tecla": "S"}),
     "voz": ("Subtítulos de voz (audio)", {"ctrl": True, "alt": True, "shift": False, "tecla": "A"}),
     "repetir": ("Repetir la última zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "R"}),
@@ -444,6 +444,18 @@ class Motor:
                                 "original": p["t"], "traduccion": tr,
                                 "idioma": "ja" if p["jp"] else "en"})
             return bloques
+
+    def leer_parrafos(self, imagen, modo="auto", omitir_espanol=True, seguir=lambda: True):
+        """Solo lectura (sin traducir): [{'caja':(x0,y0,x1,y1), 't', 'idioma'}]. Muy rápido."""
+        with self._lock:
+            if not seguir():
+                raise Cancelado()
+            t0 = time.perf_counter()
+            filas = self.lector.leer(imagen, modo, seguir)
+            self.tiempos = (time.perf_counter() - t0, self.tiempos[1])
+            return [{"caja": (p["x0"], p["y0"], p["x1"], p["y1"]), "t": p["t"],
+                     "idioma": "ja" if p["jp"] else "en"}
+                    for p in agrupar_parrafos(filas) if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
 
     # ---------- texto copiado ----------
     def traducir_texto(self, texto, modo="auto", omitir_espanol=True, seguir=lambda: True):
