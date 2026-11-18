@@ -1181,6 +1181,8 @@ def autoprueba_anclado(m, lineas):
     app.iniciar_vivo(envivo.rect_cliente(hw), None, ventana=hw)
     t = time.time()
     ok1 = bombear(30, lambda: app.vivo is not None and any("village" in b["original"].lower() for b in app.vivo.bloques))
+    propio = [b["original"] for b in (app.vivo.bloques if app.vivo else []) if "ctrl" in b["original"].lower()]
+    ok1 = ok1 and not propio
     lineas.append(f"Anclado y traducido: {'OK' if ok1 else 'FALLO'} en {time.time() - t:.1f} s "
                   f"{[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
     # fondo animado: un recuadro que cambia de color y de lugar sin parar
@@ -1306,6 +1308,10 @@ def autoprueba_vivo(m, lineas):
     app.detener()
     bombear(0.5)
     lineas.append(f"Detener: {'OK' if app.vivo is None else 'FALLO'}")
+    for w in r.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    r.withdraw()                  # que no quede encima de las pruebas siguientes
     return ok1 and ok2 and app.vivo is None
 
 

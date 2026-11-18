@@ -457,7 +457,18 @@ class Seguidor:
                     l.texto, l.candidato, l.conf_cand = p["t"], None, 0
             # si es igual o más corta (letra tapada / mal leída): se conserva la conocida
         quitadas = False
+        vistas_l = [l for l in self.lineas if l.id in vistas]
+
+        def pisa(a, b):          # ¿b ocupa el lugar de a?
+            ix = min(a[2], b[2]) - max(a[0], b[0])
+            iy = min(a[3], b[3]) - max(a[1], b[1])
+            return ix > 0 and iy > 0 and ix * iy > 0.3 * min((a[2] - a[0]) * (a[3] - a[1]),
+                                                             (b[2] - b[0]) * (b[3] - b[1]))
         for l in list(self.lineas):
+            if l.id not in vistas and any(v.confirmada and pisa(l.caja, v.caja) for v in vistas_l):
+                self.lineas.remove(l)        # otro texto ocupa su lugar: fue reemplazada
+                quitadas = True
+                continue
             if l.id not in vistas:
                 l.fallos += 1
                 if ahora - l.visto > self.gracia and l.fallos >= 2:
