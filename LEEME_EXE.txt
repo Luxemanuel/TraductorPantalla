@@ -17,6 +17,24 @@ TRADUCCIÓN EN VIVO
   solo, en menos de 1 segundo (lector de texto de Windows + traducción en
   línea; sin internet usa diccionarios guardados en tu PC).
 
+ESTILO EN PANTALLA (ventana principal)
+  · Natural: borra el texto del juego y escribe la traducción en su lugar,
+    con una letra igual o parecida (la del juego si la trae en su carpeta),
+    el mismo color, contorno y sombra. Si el fondo se mueve, esa frase usa
+    un vidrio esmerilado en vez de borrar.
+  · Vidrio, Caja (el recuadro clásico) o Panel (ventana de texto aparte).
+  Mantén pulsada F8 para ver el texto original.
+
+PERFILES POR JUEGO
+  Al anclar el traductor a un juego (Ctrl+Alt+W) se guarda su zona, estilo
+  y letra. La próxima vez que abras ese juego, la traducción empieza sola.
+  Se cambian en Ajustes > Juegos.
+
+MEMORIA Y CORRECCIONES
+  Lo traducido se recuerda entre sesiones (memoria.sqlite): lo repetido sale
+  al instante, también sin internet. En el Historial, "Corregir traducción"
+  guarda tu versión y se usa siempre.
+
 ATAJOS (funcionan en cualquier programa o juego)
   Ctrl+Alt+Z  elegir una zona y traducirla en vivo
   Ctrl+Alt+S  subtítulos de pantalla (marca la franja de subtítulos)
@@ -25,6 +43,10 @@ ATAJOS (funcionan en cualquier programa o juego)
   Ctrl+Alt+R  volver a la última zona                    (otra vez = apagar)
   Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
   Ctrl+Alt+X  detener todo
+  Ctrl+Alt+W  anclar al juego o programa que estás usando
+  Ctrl+Alt+Espacio  menú rápido junto al cursor (todas las acciones)
+  F8 (mantener)     ver el texto original
+  También hay un icono junto al reloj con todas las acciones.
 
 PRIMERA VEZ: LECTOR JAPONÉS
   El lector de texto es el de Windows. Si tu Windows no tiene el japonés,
@@ -51,6 +73,8 @@ Inglés y japonés mezclados se traducen a la vez con "Detectar solo".
 En la ventana principal tienes Historial, Mi glosario, Configuración
 (colores, alto contraste, letra, atajos, voz…) y Ayuda (F1).
 
-Tus ajustes, glosario e historial se guardan en esta misma carpeta
-(config.json, glosario.json, historial.json). Si algo falla, el archivo
+Tus ajustes, glosario, historial, memoria y perfiles se guardan en esta
+misma carpeta (config.json, glosario.json, historial.json, memoria.sqlite,
+perfiles.json). Las fuentes incluidas (carpeta "fuentes") son libres:
+ver fuentes\LICENCIAS_OFL.txt. Si algo falla, el archivo
 registro.txt guarda los detalles del error.

@@ -6,6 +6,9 @@ requests
 ctranslate2
 sentencepiece
 faster-whisper
+fonttools
+brotli
+pystray
 soundcard ; sys_platform == "win32"
 winrt-runtime ; sys_platform == "win32"
 winrt-Windows.Media.Ocr ; sys_platform == "win32"

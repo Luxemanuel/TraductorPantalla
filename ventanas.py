@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 """Ventanas secundarias: superposición, panel de texto, configuración, glosario y ayuda."""
 import copy
+import functools
+import os
+import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 import nucleo
+import tema
 from nucleo import ESQUEMAS, FUENTES, TAM_INTERFAZ, TECLAS_ATAJO, ACCIONES, atajo_legible
 
 
@@ -20,6 +24,11 @@ def _mezcla(a, b, t):
 
 def centrar(win, padre, ancho, alto):
     win.update_idletasks()
+    try:
+        ancho = min(max(ancho, win.winfo_reqwidth()), win.winfo_screenwidth() - 20)
+        alto = min(max(alto, win.winfo_reqheight()), win.winfo_screenheight() - 80)
+    except tk.TclError:
+        pass
     try:
         px, py = padre.winfo_rootx(), padre.winfo_rooty()
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
@@ -175,7 +184,7 @@ class Panel:
             ttk.Button(barra, text=texto, command=fn, width=ancho).pack(side="left", padx=2)
         ttk.Button(barra, text="Cerrar (Esc)", command=self.cerrar).pack(side="right", padx=2)
         ttk.Label(w, text="Doble clic sobre una frase para corregirla en tu glosario.",
-                  foreground="#666", padding=(10, 0)).pack(anchor="w")
+                  foreground=tema.TENUE, padding=(10, 0)).pack(anchor="w")
 
         marco = ttk.Frame(w)
         marco.pack(fill="both", expand=True, padx=8, pady=8)
@@ -281,18 +290,22 @@ class VentanaConfig:
         nb.pack(fill="both", expand=True, padx=10, pady=(10, 0))
         nb.enable_traversal()  # Ctrl+Tab para cambiar de pestaña
         nb.add(self._pestana_general(nb), text="General", underline=0)
-        nb.add(self._pestana_apariencia(nb), text="Apariencia", underline=0)
-        nb.add(self._pestana_atajos(nb), text="Atajos de teclado", underline=1)
-        nb.add(self._pestana_traduccion(nb), text="Traducción y subtítulos", underline=0)
+        nb.add(self._pestana_pantalla(nb), text="En pantalla", underline=0)
+        nb.add(self._pestana_apariencia(nb), text="Caja y panel", underline=1)
+        nb.add(self._pestana_atajos(nb), text="Atajos", underline=1)
+        nb.add(self._pestana_juegos(nb), text="Juegos", underline=0)
+        nb.add(self._pestana_traduccion(nb), text="Traducción", underline=0)
         nb.add(self._pestana_voz(nb), text="Voz", underline=0)
+        self.nb = nb
 
         pie = ttk.Frame(w, padding=10)
         pie.pack(fill="x")
         ttk.Button(pie, text="Restablecer valores", command=self.restablecer).pack(side="left")
-        ttk.Button(pie, text="Guardar", command=self.guardar).pack(side="right")
+        ttk.Button(pie, text="Guardar", style="Acento.TButton", command=self.guardar).pack(side="right")
         ttk.Button(pie, text="Cancelar", command=self.cancelar).pack(side="right", padx=6)
-        centrar(w, app.root, 700, 620)
         self._vista_previa()
+        self._previa_estilo()
+        centrar(w, app.root, 780, 700)
 
     # ---------- utilidades ----------
     def _var(self, clave, tipo=tk.StringVar):
@@ -315,17 +328,10 @@ class VentanaConfig:
         cb.grid(row=0, column=1, sticky="w")
         self.cb_idioma = cb
 
-        self._fila(f, "Mostrar la traducción:", 1)
-        cb2 = ttk.Combobox(f, state="readonly", width=28,
-                           values=["Sobre las palabras", "En un panel de texto"])
-        cb2.set("Sobre las palabras" if self.cfg["modo_vista"] == "superpuesto" else "En un panel de texto")
-        cb2.grid(row=1, column=1, sticky="w")
-        self.cb_vista = cb2
-
         self._fila(f, "Cerrar la traducción sola tras (segundos):", 2)
         ttk.Spinbox(f, from_=0, to=120, width=6, textvariable=self._var("cerrar_auto_seg", tk.IntVar)
                     ).grid(row=2, column=1, sticky="w")
-        ttk.Label(f, text="0 = no se cierra sola", foreground="#666").grid(row=3, column=1, sticky="w")
+        ttk.Label(f, text="0 = no se cierra sola", foreground=tema.TENUE).grid(row=3, column=1, sticky="w")
 
         for i, (clave, texto) in enumerate((
                 ("omitir_espanol", "No traducir lo que ya está en español"),
@@ -343,7 +349,162 @@ class VentanaConfig:
         self._fila(f, "Máximo de frases en el historial:", 11)
         ttk.Spinbox(f, from_=50, to=3000, increment=50, width=7,
                     textvariable=self._var("historial_max", tk.IntVar)).grid(row=11, column=1, sticky="w")
+        ttk.Separator(f).grid(row=12, column=0, columnspan=2, sticky="we", pady=10)
+        ttk.Checkbutton(f, text="Mostrar el icono junto al reloj (menú con todas las acciones)",
+                        variable=self._var("bandeja", tk.BooleanVar)
+                        ).grid(row=13, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Checkbutton(f, text="Empezar a traducir solo al abrir un juego que tiene perfil (pestaña Juegos)",
+                        variable=self._var("perfiles_auto", tk.BooleanVar)
+                        ).grid(row=14, column=0, columnspan=2, sticky="w", pady=4)
         return f
+
+    # ---------- estilo en pantalla ----------
+    _ESTILOS = (("natural", "Natural", "Reemplaza el texto del juego con su misma letra, color, contorno y "
+                 "sombra. Si el fondo se mueve, usa el vidrio solo en esa frase."),
+                ("vidrio", "Vidrio", "Desenfoca el texto original y escribe encima. Ideal para vídeos y "
+                 "fondos animados."),
+                ("caja", "Caja clásica", "Recuadro de color sobre cada frase (colores en «Caja y panel»)."),
+                ("panel", "Panel de texto", "La traducción sale en una ventana aparte; el juego queda limpio."))
+
+    def _pestana_pantalla(self, nb):
+        f = ttk.Frame(nb, padding=14)
+        actual = "panel" if self.cfg["modo_vista"] == "panel" else self.cfg.get("modo_texto", "natural")
+        self.v_estilo = tk.StringVar(value=actual)
+        self.v_estilo.trace_add("write", lambda *_: self._previa_estilo())
+        for i, (valor, nombre, texto) in enumerate(self._ESTILOS):
+            ttk.Radiobutton(f, text=nombre, value=valor, variable=self.v_estilo
+                            ).grid(row=i * 2, column=0, sticky="w", pady=(6, 0))
+            ttk.Label(f, text=texto, style="Tenue.TLabel", wraplength=640, justify="left"
+                      ).grid(row=i * 2 + 1, column=0, sticky="w", padx=(26, 0))
+        ttk.Checkbutton(f, text="Aparecer y desaparecer con un fundido suave",
+                        variable=self._var("fundido", tk.BooleanVar)).grid(row=8, column=0, sticky="w", pady=(12, 4))
+        ttk.Label(f, text="VISTA PREVIA", style="Seccion.TLabel").grid(row=9, column=0, sticky="w", pady=(10, 4))
+        self.lbl_previa_estilo = ttk.Label(f)
+        self.lbl_previa_estilo.grid(row=10, column=0, sticky="w")
+        return f
+
+    def _previa_estilo(self):
+        if not hasattr(self, "lbl_previa_estilo"):
+            return
+        try:
+            img = muestra_estilo(self.v_estilo.get(), self._leer_formulario())
+        except Exception:
+            nucleo.log.exception("Vista previa del estilo")
+            return
+        self._foto_estilo = ImageTk.PhotoImage(img)
+        self.lbl_previa_estilo.configure(image=self._foto_estilo)
+
+    # ---------- perfiles por juego ----------
+    _MODOS_PERFIL = {"General": None, "Natural": "natural", "Vidrio": "vidrio", "Caja": "caja"}
+
+    def _pestana_juegos(self, nb):
+        f = ttk.Frame(nb, padding=14)
+        ttk.Label(f, style="Tenue.TLabel", wraplength=700, justify="left",
+                  text="Cada vez que anclas el traductor a un juego se guarda su perfil (zona, estilo y "
+                       "letra). Al volver a abrir ese juego, la traducción empieza sola. Los cambios de "
+                       "esta pestaña se guardan al momento.").pack(anchor="w")
+        marco = ttk.Frame(f)
+        marco.pack(fill="both", expand=True, pady=8)
+        t = self.tabla_juegos = ttk.Treeview(marco, columns=("j", "z", "a", "e", "f"), show="headings",
+                                              height=9, selectmode="browse")
+        for col, txt, ancho in (("j", "Juego", 220), ("z", "Zona", 110), ("a", "Empieza solo", 100),
+                                ("e", "Estilo", 80), ("f", "Letra", 170)):
+            t.heading(col, text=txt)
+            t.column(col, width=ancho, stretch=col in ("j", "f"))
+        t.pack(fill="both", expand=True)
+        bot = ttk.Frame(f)
+        bot.pack(fill="x")
+        ttk.Button(bot, text="Empezar solo: sí / no", command=self._perfil_auto).pack(side="left", padx=2)
+        ttk.Label(bot, text="Estilo:").pack(side="left", padx=(10, 2))
+        self.cb_modo_perfil = ttk.Combobox(bot, state="readonly", width=9, values=list(self._MODOS_PERFIL))
+        self.cb_modo_perfil.pack(side="left")
+        self.cb_modo_perfil.bind("<<ComboboxSelected>>", lambda e: self._perfil_modo())
+        ttk.Button(bot, text="Elegir letra…", command=self._perfil_fuente).pack(side="left", padx=(10, 2))
+        ttk.Button(bot, text="Letra automática", command=lambda: self._perfil_cambiar(fuente=None)
+                   ).pack(side="left", padx=2)
+        ttk.Button(bot, text="Borrar", command=self._perfil_borrar).pack(side="right", padx=2)
+        t.bind("<<TreeviewSelect>>", lambda e: self._perfil_sel())
+        self._llenar_juegos()
+        return f
+
+    def _llenar_juegos(self):
+        t = self.tabla_juegos
+        sel = t.selection()
+        t.delete(*t.get_children())
+        perf = self.app.perfiles
+        for clave, p in sorted(perf.items(), key=lambda kv: -kv[1].get("usado", 0)):
+            zona = "ventana entera" if not p.get("zona") else "{}×{} px".format(
+                int(p["zona"][2] - p["zona"][0]), int(p["zona"][3] - p["zona"][1]))
+            modo = {v: k for k, v in self._MODOS_PERFIL.items()}.get(p.get("modo_texto"), "General")
+            letra = os.path.basename(p["fuente"]) if p.get("fuente") else "automática"
+            t.insert("", "end", iid=clave, values=(p.get("nombre") or os.path.basename(p.get("exe", "")),
+                                                    zona + (" · subtítulos" if p.get("estilo") == "barra" else ""),
+                                                    "sí" if p.get("auto", True) else "no", modo, letra))
+        if sel and t.exists(sel[0]):
+            t.selection_set(sel[0])
+
+    def _perfil(self):
+        sel = self.tabla_juegos.selection()
+        return (sel[0], self.app.perfiles.get(sel[0])) if sel else (None, None)
+
+    def _perfil_sel(self):
+        _, p = self._perfil()
+        if p is not None:
+            self.cb_modo_perfil.set({v: k for k, v in self._MODOS_PERFIL.items()}.get(p.get("modo_texto"), "General"))
+
+    def _perfil_cambiar(self, **cambios):
+        clave, p = self._perfil()
+        if p is None:
+            messagebox.showinfo("Juegos", "Primero elige un juego de la lista.", parent=self.win)
+            return
+        p.update(cambios)
+        nucleo.guardar_perfiles(self.app.perfiles)
+        self._llenar_juegos()
+
+    def _perfil_auto(self):
+        _, p = self._perfil()
+        if p is not None:
+            self._perfil_cambiar(auto=not p.get("auto", True))
+
+    def _perfil_modo(self):
+        self._perfil_cambiar(modo_texto=self._MODOS_PERFIL.get(self.cb_modo_perfil.get()))
+
+    def _perfil_fuente(self):
+        clave, p = self._perfil()
+        if p is None:
+            messagebox.showinfo("Juegos", "Primero elige un juego de la lista.", parent=self.win)
+            return
+        ruta = filedialog.askopenfilename(parent=self.win, title="Letra para este juego",
+                                          initialdir=os.path.dirname(p.get("exe", "")) or None,
+                                          filetypes=[("Fuentes", "*.ttf *.otf *.ttc *.woff *.woff2"),
+                                                     ("Todos", "*.*")])
+        if not ruta:
+            return
+        try:
+            import estilo
+            carpeta = os.path.join(nucleo.BASE, "fuentes_usuario")
+            os.makedirs(carpeta, exist_ok=True)
+            if ruta.lower().endswith((".woff", ".woff2")):
+                destino = os.path.join(carpeta, os.path.splitext(os.path.basename(ruta))[0] + ".ttf")
+                shutil.copyfile(estilo._woff_a_ttf(ruta), destino)
+            else:
+                destino = os.path.join(carpeta, os.path.basename(ruta))
+                if os.path.abspath(ruta) != os.path.abspath(destino):
+                    shutil.copyfile(ruta, destino)
+            from PIL import ImageFont
+            ImageFont.truetype(destino, 20).getbbox("Ab")
+        except Exception as e:
+            messagebox.showwarning("Juegos", f"No pude usar esa fuente: {e}", parent=self.win)
+            return
+        self._perfil_cambiar(fuente=destino)
+
+    def _perfil_borrar(self):
+        clave, p = self._perfil()
+        if p is not None and messagebox.askyesno("Juegos", f"¿Borrar el perfil de «{p.get('nombre', '')}»?",
+                                                 parent=self.win):
+            self.app.perfiles.pop(clave, None)
+            nucleo.guardar_perfiles(self.app.perfiles)
+            self._llenar_juegos()
 
     def _pestana_apariencia(self, nb):
         f = ttk.Frame(nb, padding=14)
@@ -398,7 +559,7 @@ class VentanaConfig:
             ttk.Combobox(f, state="readonly", width=5, values=TECLAS_ATAJO,
                          textvariable=vs["tecla"]).grid(row=fila, column=4, padx=4)
             self.v_at[accion] = vs
-        ttk.Label(f, foreground="#666", wraplength=560, justify="left",
+        ttk.Label(f, foreground=tema.TENUE, wraplength=560, justify="left",
                   text="Consejo: usa siempre Ctrl o Alt (o una tecla F) para no chocar con la escritura "
                        "normal. Dentro de la traducción también funcionan: Esc cerrar · Espacio ver "
                        "original · C copiar · L leer · P ver como texto · H ocultar barra."
@@ -413,7 +574,7 @@ class VentanaConfig:
         self.cb_motor = ttk.Combobox(f, state="readonly", width=44, values=list(self._motores))
         self.cb_motor.set({v: k for k, v in self._motores.items()}[self.cfg.get("motor_traduccion", "auto")])
         self.cb_motor.grid(row=0, column=1, sticky="w")
-        ttk.Label(f, foreground="#666", wraplength=560, justify="left",
+        ttk.Label(f, foreground=tema.TENUE, wraplength=560, justify="left",
                   text="En línea es lo más rápido y preciso, y traduce el japonés directo. Sin internet "
                        "usa diccionarios guardados en tu PC (el japonés pasa por el inglés)."
                   ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 10))
@@ -441,7 +602,34 @@ class VentanaConfig:
             ttk.Label(f, text=txt, wraplength=560, justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
         ttk.Button(f, text="Instalar lectores de inglés y japonés (Windows)…",
                    command=self._instalar_lectores).grid(row=7, column=0, columnspan=2, sticky="w", pady=6)
+        ttk.Separator(f).grid(row=8, column=0, columnspan=2, sticky="we", pady=10)
+        ttk.Checkbutton(f, text="Recordar las traducciones entre sesiones (lo repetido sale al instante, "
+                                "también sin internet)", variable=self._var("memoria", tk.BooleanVar)
+                        ).grid(row=9, column=0, columnspan=2, sticky="w")
+        self.lbl_memoria = ttk.Label(f, style="Tenue.TLabel")
+        self.lbl_memoria.grid(row=10, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        ttk.Button(f, text="Vaciar la memoria…", command=self._vaciar_memoria
+                   ).grid(row=11, column=0, columnspan=2, sticky="w")
+        self._contar_memoria()
         return f
+
+    def _contar_memoria(self):
+        mem = getattr(self.app.motor, "memoria", None)
+        total, manuales = mem.cuantas() if mem is not None else (0, 0)
+        self.lbl_memoria.configure(text=f"Guardadas: {total} frases ({manuales} corregidas por ti en el "
+                                        f"Historial). Tus correcciones mandan siempre.")
+
+    def _vaciar_memoria(self):
+        mem = getattr(self.app.motor, "memoria", None)
+        if mem is None:
+            return
+        r = messagebox.askyesnocancel("Memoria", "¿Borrar también las traducciones que corregiste tú?\n\n"
+                                      "Sí = borrar todo · No = solo las automáticas", parent=self.win)
+        if r is None:
+            return
+        mem.vaciar(tambien_correcciones=r)
+        self.app.motor.cache.clear()
+        self._contar_memoria()
 
     def _instalar_lectores(self):
         try:
@@ -478,7 +666,7 @@ class VentanaConfig:
         aviso = ("La voz usa las voces en español instaladas en tu sistema."
                  if self.app.voz.disponible() else
                  "No encontré un sintetizador de voz en este sistema.")
-        ttk.Label(f, text=aviso, foreground="#666", wraplength=520).grid(row=3, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, text=aviso, foreground=tema.TENUE, wraplength=520).grid(row=3, column=0, columnspan=3, sticky="w")
         return f
 
     # ---------- lógica ----------
@@ -490,7 +678,10 @@ class VentanaConfig:
             except tk.TclError:
                 pass
         c["idioma_origen"] = self._idiomas[self.cb_idioma.get()]
-        c["modo_vista"] = "superpuesto" if self.cb_vista.get() == "Sobre las palabras" else "panel"
+        estilo = self.v_estilo.get() if hasattr(self, "v_estilo") else "natural"
+        c["modo_vista"] = "panel" if estilo == "panel" else "superpuesto"
+        if estilo != "panel":
+            c["modo_texto"] = estilo
         c["esquema"] = self._esquemas.get(self.v_esquema.get(), "blanco_negro")
         c["atajos_activos"] = self.v_atajos_activos.get()
         c["motor_traduccion"] = self._motores.get(self.cb_motor.get(), "auto")
@@ -577,7 +768,7 @@ class EditorGlosario:
         self.v_buscar.trace_add("write", lambda *_: self.llenar())
         ttk.Entry(arriba, textvariable=self.v_buscar, width=24).pack(side="left", padx=4)
 
-        ttk.Label(w, padding=(10, 0), foreground="#666", wraplength=600,
+        ttk.Label(w, padding=(10, 0), foreground=tema.TENUE, wraplength=600,
                   text="Lo que pongas aquí se usa ANTES que el traductor automático. "
                        "Ideal para nombres, menús de juegos y frases que se traducen mal.").pack(anchor="w")
 
@@ -714,7 +905,7 @@ class VentanaHistorial:
         self.cb.set("Todos")
         self.cb.pack(side="left", padx=4)
         self.cb.bind("<<ComboboxSelected>>", lambda e: self.llenar())
-        self.lbl_total = ttk.Label(arriba, foreground="#666")
+        self.lbl_total = ttk.Label(arriba, foreground=tema.TENUE)
         self.lbl_total.pack(side="right")
 
         medio = ttk.Panedwindow(w, orient="vertical")
@@ -746,10 +937,11 @@ class VentanaHistorial:
 
         bot = ttk.Frame(w, padding=(10, 4, 10, 2))
         bot.pack(fill="x")
-        for texto, fn in (("Copiar traducción", lambda: self.copiar("traduccion")),
+        for texto, fn in (("Corregir traducción…", self.corregir_traduccion),
+                          ("Copiar traducción", lambda: self.copiar("traduccion")),
                           ("Copiar original", lambda: self.copiar("original")),
                           ("Leer en voz alta", self.leer),
-                          ("Corregir en glosario", self.corregir)):
+                          ("Al glosario", self.corregir)):
             ttk.Button(bot, text=texto, command=fn).pack(side="left", padx=2)
         bot2 = ttk.Frame(w, padding=(10, 2, 10, 10))
         bot2.pack(fill="x")
@@ -834,6 +1026,15 @@ class VentanaHistorial:
             e = sel[0]
             self.app.abrir_glosario((e["idioma"], e["original"], e["traduccion"]))
 
+    def corregir_traduccion(self):
+        sel = self.seleccion()
+        if not sel:
+            return
+        e = sel[0]
+        nueva = pedir_texto(self.win, "Corregir traducción", e["original"], e["traduccion"])
+        if nueva and nueva.strip() != e["traduccion"]:
+            self.app.corregir_traduccion(e, nueva)
+
     def borrar(self):
         sel = [int(i) for i in self.tabla.selection()]
         if sel:
@@ -867,6 +1068,240 @@ class VentanaHistorial:
 
 
 # ============================================================================
+# DIÁLOGO DE TEXTO (con el tema)
+# ============================================================================
+def pedir_texto(padre, titulo, original, inicial):
+    w = tk.Toplevel(padre)
+    w.title(titulo)
+    w.transient(padre)
+    w.attributes("-topmost", True)
+    w.resizable(False, False)
+    marco = ttk.Frame(w, padding=16)
+    marco.pack(fill="both", expand=True)
+    ttk.Label(marco, text="ORIGINAL", style="Seccion.TLabel").pack(anchor="w")
+    ttk.Label(marco, text=original, wraplength=520, justify="left", style="Tenue.TLabel").pack(anchor="w", pady=(2, 10))
+    ttk.Label(marco, text="TU TRADUCCIÓN (se usará siempre para esta frase)", style="Seccion.TLabel").pack(anchor="w")
+    t = tk.Text(marco, width=62, height=4, wrap="word", relief="flat", padx=8, pady=6,
+                highlightthickness=1, highlightbackground=tema.BORDE, highlightcolor=tema.VINO_CLARO)
+    t.insert("1.0", inicial)
+    t.pack(fill="x", pady=(4, 12))
+    res = {"v": None}
+
+    def aceptar(_=None):
+        res["v"] = t.get("1.0", "end").strip()
+        w.destroy()
+        return "break"
+    bot = ttk.Frame(marco)
+    bot.pack(fill="x")
+    ttk.Button(bot, text="Guardar", style="Acento.TButton", command=aceptar).pack(side="right")
+    ttk.Button(bot, text="Cancelar", command=w.destroy).pack(side="right", padx=6)
+    t.bind("<Return>", aceptar)
+    w.bind("<Escape>", lambda e: w.destroy())
+    try:
+        padre.winfo_toplevel().tk.call("wm", "iconphoto", w._w, "-default")
+    except tk.TclError:
+        pass
+    tema.barra_oscura(w)
+    t.focus_set()
+    t.tag_add("sel", "1.0", "end")
+    w.grab_set()
+    w.wait_window()
+    return res["v"]
+
+
+@functools.lru_cache(maxsize=1)
+def _escena_muestra():
+    """Un cuadro de diálogo de juego de ejemplo (para la vista previa de los estilos)."""
+    import estilo
+    W, H = 560, 132
+    y = Image.linear_gradient("L").resize((W, H)).point(lambda v: v)
+    fondo = Image.merge("RGB", (y.point(lambda v: 40 + v // 3), y.point(lambda v: 30 + v // 6),
+                                y.point(lambda v: 70 + v // 4)))
+    d = ImageDraw.Draw(fondo)
+    for (cx, cy, r, col) in ((80, 30, 46, (210, 120, 150)), (300, 20, 60, (90, 170, 200)),
+                             (470, 70, 52, (230, 180, 90)), (200, 110, 40, (120, 90, 200))):
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=col)
+    fondo = fondo.filter(ImageFilter.GaussianBlur(14)).convert("RGBA")
+    caja = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(caja).rounded_rectangle((14, 28, W - 14, H - 14), radius=12, fill=(20, 16, 34, 205),
+                                           outline=(200, 190, 230, 160), width=2)
+    fondo.alpha_composite(caja)
+    ruta = estilo._buscar_archivo("Nunito.ttf")
+    texto = "Welcome back, traveler."
+    if ruta:
+        f = estilo.cargar(ruta, 26, "Regular")
+    else:
+        f = nucleo.cargar_fuente("Arial", 26)
+    d = ImageDraw.Draw(fondo)
+    d.text((40, 62), texto, font=f, fill=(30, 24, 50), anchor="ls")
+    d.text((38, 60), texto, font=f, fill=(238, 234, 244), anchor="ls")
+    x0, y0, x1, y1 = d.textbbox((38, 60), texto, font=f, anchor="ls")
+    return fondo.convert("RGB"), (x0, y0, x1, y1), texto, ruta
+
+
+def muestra_estilo(modo, cfg):
+    """Imagen 'en el juego' / 'con el traductor' para el estilo elegido."""
+    import numpy as np
+    import estilo
+    img, caja, texto, ruta = _escena_muestra()
+    trad = "¡Bienvenido de nuevo, viajero!"
+    if modo == "panel":
+        res = img
+    elif modo == "caja":
+        res = nucleo.componer(img, [{"caja": caja, "traduccion": trad}], cfg).convert("RGB")
+    else:
+        res = _muestra_natural(modo)
+    W, H = img.size
+    out = Image.new("RGB", (W, H * 2 + 8), tema.OBSIDIANA)
+    out.paste(img, (0, 0))
+    out.paste(res, (0, H + 8))
+    d = ImageDraw.Draw(out)
+    f = nucleo.cargar_fuente("Arial", 12, True)
+    for y, t in ((6, "EN EL JUEGO"), (H + 14, "CON EL TRADUCTOR" + ("  (la traducción va al panel)" if modo == "panel" else ""))):
+        d.rounded_rectangle((W - 8 - d.textlength(t, font=f) - 14, y, W - 8, y + 18), radius=6, fill=(122, 21, 48))
+        d.text((W - 15, y + 9), t, font=f, fill=(237, 228, 211), anchor="rm")
+    return out
+
+
+@functools.lru_cache(maxsize=4)
+def _muestra_natural(modo):
+    import numpy as np
+    import estilo
+    img, caja, texto, ruta = _escena_muestra()
+    arr = np.asarray(img)
+    est = estilo.analizar(arr, caja, [], [(texto, caja)])
+    if est is None:
+        est = estilo.est_basico(caja)
+    obj = estilo._objetivo(est)
+    r = estilo._puntuar(obj, ruta, "Regular", texto) if (ruta and obj is not None) else None
+    fuente = (ruta, "Regular", r[1]) if r else (estilo.equivalente_latina("sans")[0], None, 22)
+    pieza = {"est": est, "trad": "¡Bienvenido de nuevo, viajero!", "modo": "natural" if modo == "natural" else "suave"}
+    capa = estilo.componer(arr, [pieza], lambda p: fuente)
+    out = img.convert("RGBA")
+    out.alpha_composite(capa)
+    return out.convert("RGB")
+
+
+# ============================================================================
+# MENÚ RÁPIDO (Ctrl+Alt+Espacio): todas las acciones junto al cursor
+# ============================================================================
+class _FilaMenu:
+    """Una fila del menú rápido: acción a la izquierda, atajo a la derecha."""
+
+    def __init__(self, padre, texto, atajo, fn, menu):
+        self.fn = fn
+        fam = menu.app.fuente_ui.actual("family")
+        tam = menu.app.fuente_ui.actual("size")
+        self.f = tk.Frame(padre, bg=tema.OBSIDIANA, padx=12, pady=6, cursor="hand2")
+        self.l1 = tk.Label(self.f, text=texto, bg=tema.OBSIDIANA, fg=tema.HUESO, font=(fam, tam), anchor="w")
+        self.l2 = tk.Label(self.f, text=atajo, bg=tema.OBSIDIANA, fg=tema.TENUE, font=(fam, max(8, tam - 1)))
+        self.l1.pack(side="left")
+        self.l2.pack(side="right", padx=(24, 0))
+        self.f.pack(fill="x")
+        for w in (self.f, self.l1, self.l2):
+            w.bind("<Enter>", lambda e: menu.marcar(self))
+            w.bind("<Button-1>", lambda e: menu.ejecutar(self))
+
+    def pintar(self, activa):
+        bg = tema.VINO if activa else tema.OBSIDIANA
+        for w in (self.f, self.l1, self.l2):
+            w.configure(bg=bg)
+        self.l2.configure(fg=tema.HUESO if activa else tema.TENUE)
+
+
+class MenuRapido:
+    """Ctrl+Alt+Espacio: todas las acciones junto al cursor, sin buscar la ventana."""
+
+    def __init__(self, app, previa):
+        import envivo
+        self.app = app
+        w = self.win = tk.Toplevel(app.root)
+        w.overrideredirect(True)
+        w.attributes("-topmost", True)
+        app.poner_icono(w)
+        borde = tk.Frame(w, bg=tema.VINO, padx=1, pady=1)
+        borde.pack(fill="both", expand=True)
+        f = ttk.Frame(borde, padding=(0, 8, 0, 8))
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="TRADUCTOR DE PANTALLA", style="Seccion.TLabel").pack(anchor="w", padx=12, pady=(0, 6))
+        nombre = None
+        if previa and envivo.ES_WINDOWS and not envivo.es_del_escritorio(previa):
+            nombre = envivo.titulo_ventana(previa)[:30]
+        at = lambda a: atajo_legible(app.cfg["atajos"][a])
+        acciones = [
+            (f"Anclar a «{nombre}»" if nombre else "Anclar a un juego o programa", at("anclar"),
+             lambda: app.anclar_ventana(previa)),
+            ("Elegir zona en vivo", at("zona"), lambda: app.accion("zona")),
+            ("Subtítulos de pantalla", at("subtitulos"), lambda: app.accion("subtitulos")),
+            ("Subtítulos de voz", at("voz"), lambda: app.accion("voz")),
+            ("Volver a la última zona", at("repetir"), lambda: app.accion("repetir")),
+            ("Traducir lo copiado", at("portapapeles"), lambda: app.accion("portapapeles")),
+            ("Detener", at("detener"), app.detener),
+        ]
+        self.filas = [_FilaMenu(f, f"{i}   {t}", a, fn, self) for i, (t, a, fn) in enumerate(acciones, start=1)]
+        ttk.Separator(f).pack(fill="x", pady=6, padx=10)
+        est = ttk.Frame(f)
+        est.pack(fill="x", padx=10)
+        for i, (t, v) in enumerate((("Natural", "natural"), ("Vidrio", "vidrio"), ("Caja", "caja"),
+                                    ("Panel", "panel"))):
+            ttk.Radiobutton(est, text=t, value=v, variable=app.v_estilo, style="Toolbutton",
+                            takefocus=False).grid(row=0, column=i, sticky="we", padx=1)
+            est.columnconfigure(i, weight=1, uniform="m")
+        ttk.Separator(f).pack(fill="x", pady=6, padx=10)
+        for t, a, fn in (("Historial", "", app.abrir_historial), ("Ajustes", "", app.abrir_config),
+                         ("Mostrar el traductor", "", app.mostrar_principal)):
+            self.filas.append(_FilaMenu(f, f"     {t}", a, fn, self))
+        self.marcada = None
+        w.update_idletasks()
+        px, py = app.root.winfo_pointerxy()
+        ancho, alto = max(340, w.winfo_reqwidth()), w.winfo_reqheight()
+        sw, sh = w.winfo_screenwidth(), w.winfo_screenheight()
+        w.geometry(f"{ancho}x{alto}+{max(0, min(px, sw - ancho - 4))}+{max(0, min(py, sh - alto - 48))}")
+        w.bind("<Escape>", lambda e: self.cerrar())
+        w.bind("<FocusOut>", lambda e: w.after(150, self._si_pierde_foco))
+        w.bind("<Down>", lambda e: self._mover(1))
+        w.bind("<Up>", lambda e: self._mover(-1))
+        w.bind("<Return>", lambda e: self.marcada and self.ejecutar(self.marcada))
+        for i in range(1, len(acciones) + 1):
+            w.bind(str(i), lambda e, i=i: self.ejecutar(self.filas[i - 1]))
+        self.marcar(self.filas[0])
+        w.focus_force()
+
+    def marcar(self, fila):
+        if self.marcada is not None:
+            self.marcada.pintar(False)
+        self.marcada = fila
+        fila.pintar(True)
+
+    def _mover(self, d):
+        i = self.filas.index(self.marcada) if self.marcada in self.filas else -1
+        self.marcar(self.filas[(i + d) % len(self.filas)])
+
+    def _si_pierde_foco(self):
+        try:
+            foco = self.win.focus_get()
+        except (tk.TclError, KeyError):
+            foco = None
+        if foco is None or foco.winfo_toplevel() is not self.win:
+            self.cerrar()
+
+    def ejecutar(self, fila):
+        self.cerrar()
+        self.app.root.after(60, fila.fn)
+
+    def existe(self):
+        try:
+            return self.win.winfo_exists()
+        except tk.TclError:
+            return False
+
+    def cerrar(self):
+        if self.existe():
+            self.win.destroy()
+        self.app.menu_win = None
+
+
+# ============================================================================
 # AYUDA
 # ============================================================================
 def ventana_ayuda(app):
@@ -879,10 +1314,29 @@ def ventana_ayuda(app):
   La traducción aparece encima del texto en una capa transparente: los clics
   y el teclado la ATRAVIESAN, así que sigues usando tu juego o programa.
   Cuando el texto cambia se vuelve a traducir solo (en menos de 1 segundo).
-  · Inglés y japonés mezclados se leen a la vez con "Detectar solo".
-  · Elige el idioma de destino en "Traducir a".
+  · Inglés y japonés mezclados se leen a la vez con "Detectar".
+  · Elige el idioma de destino en la ventana principal.
   · Juegos: usa "ventana sin bordes" (borderless); en pantalla completa
     exclusiva Windows no deja dibujar nada encima.
+
+ESTILO EN PANTALLA
+  · Natural: borra el texto del juego y escribe la traducción en su lugar,
+    con la misma letra (la del juego si la trae en su carpeta, también en
+    .woff o dentro de archive.rpa), color, contorno y sombra.
+  · Vidrio: desenfoca el original y escribe encima (fondos que se mueven;
+    en modo Natural se usa solo en las frases con fondo animado).
+  · Caja: el recuadro de color clásico.   · Panel: ventana de texto aparte.
+  Mantén {at['original']} para ver el texto original mientras la pulsas.
+
+PERFILES POR JUEGO
+  Al anclar el traductor a un juego se guarda su zona, estilo y letra. La
+  próxima vez que abras ese juego, la traducción empieza sola. En Ajustes →
+  Juegos puedes desactivarlo, elegir su letra o borrar el perfil.
+
+MEMORIA Y CORRECCIONES
+  Lo traducido se recuerda entre sesiones: lo repetido sale al instante,
+  incluso sin internet. En el Historial, «Corregir traducción…» guarda tu
+  versión de una frase y se usa siempre a partir de ese momento.
 
 SUBTÍTULOS
   · De pantalla: marca la franja donde salen los subtítulos; se cubre con
@@ -905,6 +1359,8 @@ ATAJOS GLOBALES (funcionan en cualquier programa)
   {at['repetir']:<14} Volver a la última zona (otra vez = apagar)
   {at['portapapeles']:<14} Traducir lo que copiaste con Ctrl+C (sin leer la pantalla)
   {at['detener']:<14} Detener: cancela, cierra la traducción y calla la voz
+  {at['menu']:<14} Menú rápido junto al cursor (todas las acciones)
+  {at['original']:<14} Mantener pulsada: ver el texto original
 
 DOS IDIOMAS A LA VEZ
   Con "Detectar solo", cada frase se clasifica por separado: si en la

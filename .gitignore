@@ -16,3 +16,10 @@ app_anterior/
 voz_prueba.wav
 version.json
 actualizacion.zip
+memoria.sqlite*
+perfiles.json
+fuentes_usuario/
+capturas_prueba/
+# fuentes japonesas grandes: solo para pruebas locales (Windows ya trae las suyas)
+fuentes/NotoSansJP.ttf
+fuentes/NotoSerifJP.ttf

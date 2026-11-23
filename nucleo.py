@@ -32,6 +32,8 @@ RUTA_CONFIG = os.path.join(BASE, "config.json")
 RUTA_GLOSARIO = os.path.join(BASE, "glosario.json")
 RUTA_REGISTRO = os.path.join(BASE, "registro.txt")
 RUTA_HISTORIAL = os.path.join(BASE, "historial.json")
+RUTA_MEMORIA = os.path.join(BASE, "memoria.sqlite")
+RUTA_PERFILES = os.path.join(BASE, "perfiles.json")
 
 log = logging.getLogger("traductor")
 
@@ -83,7 +85,7 @@ _RESPALDO_NEGRITA = ["arialbd.ttf", "Arial Bold.ttf", "segoeuib.ttf",
 TAM_INTERFAZ = {"Normal": 10, "Grande": 13, "Muy grande": 16}
 
 TECLAS_ATAJO = [chr(c) for c in range(ord("A"), ord("Z") + 1)] + \
-               [str(n) for n in range(10)] + [f"F{n}" for n in range(1, 13)]
+               [str(n) for n in range(10)] + [f"F{n}" for n in range(1, 13)] + ["Espacio"]
 
 ACCIONES = {
     # clave: (nombre visible, atajo por defecto)
@@ -95,7 +97,10 @@ ACCIONES = {
     "repetir": ("Repetir la última zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "R"}),
     "portapapeles": ("Traducir lo copiado", {"ctrl": True, "alt": True, "shift": False, "tecla": "V"}),
     "detener": ("Detener / cerrar todo", {"ctrl": True, "alt": True, "shift": False, "tecla": "X"}),
+    "menu": ("Menú rápido junto al cursor", {"ctrl": True, "alt": True, "shift": False, "tecla": "Espacio"}),
+    "original": ("Ver el original (mantener pulsada)", {"ctrl": False, "alt": False, "shift": False, "tecla": "F8"}),
 }
+ACCIONES_MANTENER = {"original"}      # se vigilan mientras están pulsadas, no al pulsarlas
 
 DEFAULTS = {
     "idioma_origen": "auto",          # auto | en | ja
@@ -123,6 +128,11 @@ DEFAULTS = {
     "subtitulo_original": True,       # mostrar también el texto original pequeño
     "guardar_historial": True,        # conservar el historial al cerrar
     "historial_max": 300,             # entradas como máximo
+    "modo_texto": "natural",          # natural (integrada en el juego) | vidrio | caja (clásica)
+    "fundido": True,                  # aparecer/desaparecer suave
+    "memoria": True,                  # recordar traducciones entre sesiones
+    "perfiles_auto": True,            # traducir solo al abrir un juego con perfil
+    "bandeja": True,                  # icono junto al reloj
 }
 
 
@@ -160,8 +170,135 @@ def atajo_legible(at):
 def atajo_pynput(at):
     partes = [f"<{k}>" for k in ("ctrl", "alt", "shift") if at.get(k)]
     t = at["tecla"]
-    partes.append(f"<{t.lower()}>" if t.startswith("F") and len(t) > 1 else t.lower())
+    if t == "Espacio":
+        partes.append("<space>")
+    else:
+        partes.append(f"<{t.lower()}>" if t.startswith("F") and len(t) > 1 else t.lower())
     return "+".join(partes)
+
+
+# ============================================================================
+# PERFILES POR JUEGO (zona, modo y fuente de cada programa)
+# ============================================================================
+def clave_perfil(exe):
+    return os.path.normcase(os.path.abspath(exe)) if exe else None
+
+
+def cargar_perfiles():
+    try:
+        with open(RUTA_PERFILES, encoding="utf-8") as f:
+            datos = json.load(f)
+        return datos if isinstance(datos, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning("perfiles.json ilegible: %s", e)
+        return {}
+
+
+def guardar_perfiles(perfiles):
+    try:
+        tmp = RUTA_PERFILES + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(perfiles, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, RUTA_PERFILES)
+    except Exception:
+        log.exception("No se pudo guardar perfiles.json")
+
+
+# ============================================================================
+# MEMORIA DE TRADUCCIONES (entre sesiones) Y CORRECCIONES DEL USUARIO
+# ============================================================================
+class Memoria:
+    """Lo traducido se guarda en memoria.sqlite: lo repetido sale al instante (incluso sin
+    internet) y lo que corrijas a mano manda siempre sobre la traducción automática."""
+    MAXIMO = 60000
+
+    def __init__(self, ruta=None):
+        import sqlite3
+        self._lock = threading.Lock()
+        self.db = None
+        try:
+            self.db = sqlite3.connect(ruta or RUTA_MEMORIA, check_same_thread=False,
+                                      isolation_level=None, timeout=3)
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=NORMAL")
+            self.db.execute("CREATE TABLE IF NOT EXISTS memoria (origen TEXT, destino TEXT, clave TEXT, "
+                            "texto TEXT, traduccion TEXT, manual INTEGER DEFAULT 0, usado REAL, "
+                            "PRIMARY KEY (origen, destino, clave))")
+            self._recortar()
+        except Exception:
+            log.exception("Memoria de traducciones no disponible")
+            self.db = None
+
+    def buscar(self, origen, destino, claves):
+        """→ {clave: (traducción, es_corrección)}"""
+        if self.db is None or not claves:
+            return {}
+        res = {}
+        with self._lock:
+            try:
+                for i in range(0, len(claves), 400):
+                    trozo = list(claves[i:i + 400])
+                    marcas = ",".join("?" * len(trozo))
+                    for c, t, m in self.db.execute(
+                            f"SELECT clave, traduccion, manual FROM memoria WHERE origen=? AND destino=? "
+                            f"AND clave IN ({marcas})", [origen, destino] + trozo):
+                        res[c] = (t, bool(m))
+                if res:
+                    ahora = time.time()
+                    self.db.executemany("UPDATE memoria SET usado=? WHERE origen=? AND destino=? AND clave=?",
+                                        [(ahora, origen, destino, c) for c in res])
+            except Exception:
+                log.exception("Leyendo la memoria")
+        return res
+
+    def guardar(self, origen, destino, pares, manual=False):
+        """pares: [(clave, texto original, traducción)]"""
+        if self.db is None or not pares:
+            return
+        ahora = time.time()
+        with self._lock:
+            try:
+                self.db.executemany(
+                    "INSERT INTO memoria (origen, destino, clave, texto, traduccion, manual, usado) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(origen, destino, clave) DO UPDATE SET "
+                    "traduccion=excluded.traduccion, texto=excluded.texto, manual=excluded.manual, "
+                    "usado=excluded.usado WHERE memoria.manual=0 OR excluded.manual=1",
+                    [(origen, destino, c, t, tr, 1 if manual else 0, ahora) for c, t, tr in pares if tr])
+            except Exception:
+                log.exception("Guardando en la memoria")
+
+    def cuantas(self):
+        if self.db is None:
+            return (0, 0)
+        with self._lock:
+            try:
+                total, manuales = self.db.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(manual), 0) FROM memoria").fetchone()
+                return int(total), int(manuales)
+            except Exception:
+                return (0, 0)
+
+    def vaciar(self, tambien_correcciones=False):
+        if self.db is None:
+            return
+        with self._lock:
+            self.db.execute("DELETE FROM memoria" + ("" if tambien_correcciones else " WHERE manual=0"))
+            self.db.execute("VACUUM")
+
+    def _recortar(self):
+        total = self.db.execute("SELECT COUNT(*) FROM memoria").fetchone()[0]
+        if total > self.MAXIMO:
+            sobra = total - int(self.MAXIMO * 0.9)
+            self.db.execute("DELETE FROM memoria WHERE rowid IN (SELECT rowid FROM memoria WHERE manual=0 "
+                            "ORDER BY usado LIMIT ?)", (sobra,))
+
+    def cerrar(self):
+        if self.db is not None:
+            with self._lock:
+                self.db.close()
+            self.db = None
 
 
 # ============================================================================
@@ -324,6 +461,7 @@ class Motor:
         self.cache = {}
         self.tiempos = (0.0, 0.0)          # (lectura, traducción) de la última vez
         self._lock = threading.Lock()
+        self.memoria = Memoria()
 
     def cargar(self):
         import lector as modulo_lector
@@ -368,15 +506,31 @@ class Motor:
     # ---------- traducción ----------
     def traducir_lote(self, items, destino=None):
         """items: [(texto, idioma_origen)] -> traducciones en el mismo orden (None si falló)."""
-        destino = destino or self.cfg().get("idioma_destino", "es")
+        cfg = self.cfg()
+        destino = destino or cfg.get("idioma_destino", "es")
+        usar_memoria = cfg.get("memoria", True) and self.memoria is not None
         res = [None] * len(items)
         pendientes = {}
+        guardado = {}
+        if self.memoria is not None:
+            por_idioma = {}
+            for texto, idioma in items:
+                if idioma != destino:
+                    por_idioma.setdefault(idioma, set()).add(self._norm(texto, idioma))
+            for idioma, claves in por_idioma.items():
+                for c, v in self.memoria.buscar(idioma, destino, sorted(claves)).items():
+                    guardado[(idioma, c)] = v
         for i, (texto, idioma) in enumerate(items):
             norm = self._norm(texto, idioma)
-            if destino == "es" and (idioma, norm) in self.glosario:    # 1) tu glosario
+            mem = guardado.get((idioma, norm))
+            if mem and mem[1]:                                          # 1) tu corrección
+                res[i] = mem[0]
+            elif destino == "es" and (idioma, norm) in self.glosario:   # 2) tu glosario
                 res[i] = self.glosario[(idioma, norm)]
-            elif (idioma, destino, norm) in self.cache:                 # 2) ya traducido antes
+            elif (idioma, destino, norm) in self.cache:                 # 3) ya traducido hoy
                 res[i] = self.cache[(idioma, destino, norm)]
+            elif mem and usar_memoria:                                  # 4) traducido otro día
+                res[i] = self.cache[(idioma, destino, norm)] = mem[0]
             elif idioma == destino:
                 res[i] = texto
             else:
@@ -391,6 +545,9 @@ class Motor:
                 for (i, _, clave), tr in zip(lista, trads):
                     res[i] = tr
                     self.cache[clave] = tr
+                if usar_memoria:
+                    self.memoria.guardar(idioma, destino, [(c[2], t, tr) for (_, t, c), tr in zip(lista, trads)
+                                                           if tr and tr.strip() and tr.strip() != t.strip()])
             except Exception as e:
                 log.exception("Traduciendo %s→%s", idioma, destino)
                 errores.append(e)
@@ -407,6 +564,14 @@ class Motor:
 
     def traducir(self, texto, idioma):
         return self.traducir_lote([(texto, idioma)])[0] or texto
+
+    def corregir(self, texto, idioma, traduccion, destino=None):
+        """Tu traducción para esta frase: se usará siempre (también en otras sesiones)."""
+        destino = destino or self.cfg().get("idioma_destino", "es")
+        norm = self._norm(texto, idioma)
+        self.cache[(idioma, destino, norm)] = traduccion
+        if self.memoria is not None:
+            self.memoria.guardar(idioma, destino, [(norm, texto, traduccion)], manual=True)
 
     def _vale(self, texto, es_jp, modo, omitir):
         if len(texto) < 2 or not LETRA_RE.search(texto):
@@ -535,10 +700,12 @@ def agrupar_parrafos(filas):
                 p["x0"], p["x1"] = min(p["x0"], f["x0"]), max(p["x1"], f["x1"])
                 p["y1"] = max(p["y1"], f["y1"])
                 p["ultima"] = f
+                p["filas"].append((f["t"], (f["x0"], f["y0"], f["x1"], f["y1"])))
                 break
         else:
             parrafos.append({"x0": f["x0"], "y0": f["y0"], "x1": f["x1"], "y1": f["y1"],
-                             "t": f["t"], "jp": f["jp"], "ultima": f})
+                             "t": f["t"], "jp": f["jp"], "ultima": f,
+                             "filas": [(f["t"], (f["x0"], f["y0"], f["x1"], f["y1"]))]})
     return parrafos
 
 

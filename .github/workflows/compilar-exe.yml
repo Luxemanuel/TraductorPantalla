@@ -58,10 +58,12 @@ jobs:
           pyinstaller --noconfirm --windowed `
             --name "Traductor de Pantalla" --icon icono.ico `
             --collect-all ctranslate2 --collect-all sentencepiece --collect-all faster_whisper `
-            --collect-all winrt --collect-data soundcard `
+            --collect-all winrt --collect-data soundcard --collect-submodules fontTools `
             --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
+            --hidden-import pystray._win32 --hidden-import brotli `
             --hidden-import actualizar --hidden-import subtitulos_voz --hidden-import lector `
-            --hidden-import traduccion --hidden-import version `
+            --hidden-import traduccion --hidden-import version --hidden-import estilo `
+            --hidden-import capa_natural --hidden-import tema --hidden-import bandeja `
             @extra lanzador.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
@@ -71,6 +73,9 @@ jobs:
           $d = "dist\Traductor de Pantalla"
           Copy-Item -Recurse modelos "$d\modelos"
           Copy-Item glosario.json "$d\glosario.json"
+          # fuentes libres para el estilo natural (las japonesas grandes no: Windows ya trae)
+          New-Item -ItemType Directory "$d\fuentes" -Force | Out-Null
+          Get-ChildItem fuentes | Where-Object { $_.Name -notin @("NotoSansJP.ttf", "NotoSerifJP.ttf") } | Copy-Item -Destination "$d\fuentes"
           New-Item -ItemType Directory "$d\app" -Force | Out-Null
           Get-ChildItem *.py | Where-Object { $_.Name -notin @("lanzador.py", "crear_icono.py") } | Copy-Item -Destination "$d\app"
           Copy-Item LEEME_EXE.txt "$d\LEEME.txt"
@@ -101,6 +106,17 @@ jobs:
           if ($p.ExitCode -ne 0) { Write-Error "La autoprueba falló"; exit 1 }
           Remove-Item "$d\autoprueba.txt", "$d\registro.txt", "$d\voz_prueba.wav", "$d\historial.json" -ErrorAction SilentlyContinue
 
+      - name: Guardar las capturas de la prueba (para revisarlas)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-prueba
+          path: |
+            dist/Traductor de Pantalla/capturas_prueba/*.png
+            dist/Traductor de Pantalla/autoprueba.txt
+            dist/Traductor de Pantalla/registro.txt
+          if-no-files-found: ignore
+
       - name: Prueba de arranque (abrir la ventana 90 s)
         shell: pwsh
         env:
@@ -118,7 +134,12 @@ jobs:
 
       - name: Comprimir
         shell: pwsh
-        run: 7z a -tzip -mx=5 TraductorPantalla-Windows.zip "dist\Traductor de Pantalla"
+        run: |
+          $d = "dist\Traductor de Pantalla"
+          # nada de las pruebas dentro del paquete
+          Remove-Item -Recurse -Force "$d\capturas_prueba", "$d\fuentes_usuario" -ErrorAction SilentlyContinue
+          Remove-Item "$d\memoria.sqlite*", "$d\perfiles.json", "$d\config.json", "$d\historial.json", "$d\registro.txt" -ErrorAction SilentlyContinue
+          7z a -tzip -mx=5 TraductorPantalla-Windows.zip "dist\Traductor de Pantalla"
 
       - name: Guardar como artefacto
         uses: actions/upload-artifact@v4

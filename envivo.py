@@ -347,6 +347,83 @@ def rect_cliente(hwnd):
     return {"left": p.x, "top": p.y, "width": rc.right, "height": rc.bottom}
 
 
+def exe_de_ventana(hwnd):
+    """Ruta del programa (.exe) dueño de una ventana, o None."""
+    if not ES_WINDOWS or not hwnd:
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    pid = wt.DWORD()
+    u32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x1000, False, pid.value)          # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = wt.DWORD(1024)
+        if k32.QueryFullProcessImageNameW(ctypes.c_void_p(h), 0, buf, ctypes.byref(n)):
+            return buf.value
+    finally:
+        k32.CloseHandle(ctypes.c_void_p(h))
+    return None
+
+
+def clase_ventana(hwnd):
+    import ctypes
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetClassNameW(ctypes.c_void_p(hwnd), buf, 256)
+    return buf.value
+
+
+_ESCRITORIO = {"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "Progman",
+               "WorkerW", "TopLevelWindowForOverflowXamlIsland", "Windows.UI.Core.CoreWindow"}
+
+
+def es_del_escritorio(hwnd):
+    """Barra de tareas, escritorio, menú Inicio…: no son programas que se puedan anclar."""
+    try:
+        return clase_ventana(hwnd) in _ESCRITORIO
+    except Exception:
+        return False
+
+
+def ventana_en(x, y):
+    """Ventana principal que hay en un punto de la pantalla."""
+    if not ES_WINDOWS:
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+    u32 = ctypes.windll.user32
+    u32.WindowFromPoint.restype = ctypes.c_void_p
+    u32.GetAncestor.restype = ctypes.c_void_p
+    hw = u32.WindowFromPoint(wt.POINT(int(x), int(y)))
+    return u32.GetAncestor(ctypes.c_void_p(hw), 2) if hw else None     # GA_ROOT
+
+
+_VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}
+
+
+def atajo_pulsado(at):
+    """¿Está pulsada AHORA la combinación (para «mantener para ver el original»)?"""
+    if not ES_WINDOWS or not at:
+        return False
+    import ctypes
+    est = ctypes.windll.user32.GetAsyncKeyState
+    t = at.get("tecla", "")
+    if t.startswith("F") and len(t) > 1 and t[1:].isdigit():
+        vk = 0x6F + int(t[1:])
+    elif t == "Espacio":
+        vk = 0x20
+    elif len(t) == 1:
+        vk = ord(t.upper())
+    else:
+        return False
+    teclas = [vk] + [v for k, v in _VK.items() if at.get(k)]
+    return all(est(v) & 0x8000 for v in teclas)
+
+
 def estado_ventana(hwnd, propias):
     """'cerrada', 'oculta' (minimizada u otro programa delante) o 'visible'."""
     import ctypes
@@ -376,12 +453,13 @@ def _n(t):
 
 
 class Linea:
-    __slots__ = ("id", "texto", "idioma", "caja", "trad", "trad_de", "visto", "fallos",
+    __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
                  "confirmada", "candidato", "conf_cand", "nueva")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
         self.texto, self.idioma, self.caja = p["t"], p["idioma"], p["caja"]
+        self.filas = p.get("filas")
         self.trad = None            # traducción que se muestra
         self.trad_de = None         # texto que se tradujo (para saber si hay que retraducir)
         self.visto = ahora
@@ -437,6 +515,7 @@ class Seguidor:
             l = mejor
             if max(abs(a - b) for a, b in zip(p["caja"], l.caja)) > 3:   # ignorar temblores de 1-3 px
                 l.caja = p["caja"]
+                l.filas = p.get("filas")
             l.visto, l.fallos = ahora, 0
             nl = _n(l.texto)
             if not l.confirmada:
@@ -444,9 +523,9 @@ class Seguidor:
                 if difflib.SequenceMatcher(None, np_, nl, autojunk=False).ratio() >= 0.9:
                     l.confirmada = True
                     if len(np_) > len(nl):
-                        l.texto = p["t"]
+                        l.texto, l.filas = p["t"], p.get("filas")
                 else:
-                    l.texto = p["t"]       # todavía se está escribiendo / estabilizando
+                    l.texto, l.filas = p["t"], p.get("filas")     # aún se está escribiendo
             elif np_ != nl and len(np_) >= len(nl) + 2:
                 # versión más completa: adoptarla si se ve dos veces
                 if l.candidato is not None and _n(l.candidato) == np_:
@@ -455,6 +534,7 @@ class Seguidor:
                     l.candidato, l.conf_cand = p["t"], 1
                 if l.conf_cand >= 2:
                     l.texto, l.candidato, l.conf_cand = p["t"], None, 0
+                    l.filas = p.get("filas")
             # si es igual o más corta (letra tapada / mal leída): se conserva la conocida
         quitadas = False
         vistas_l = [l for l in self.lineas if l.id in vistas]
@@ -496,6 +576,12 @@ class Seguidor:
                 l.trad = t
         return nuevas
 
+    def olvidar_traducciones(self, original=None):
+        """Volver a traducir (todas, o las de un texto) — p. ej. tras corregir una traducción."""
+        for l in self.lineas:
+            if original is None or _n(l.texto) == _n(original):
+                l.trad_de = None
+
     def visibles(self, dx=0, dy=0):
         return [{"id": l.id, "caja": (l.caja[0] + dx, l.caja[1] + dy, l.caja[2] + dx, l.caja[3] + dy),
                  "original": l.texto, "traduccion": l.trad, "idioma": l.idioma}
@@ -512,9 +598,16 @@ class SesionEnVivo:
     caja:   zona dentro de 'mon' (None = todo)
     ventana: hwnd del programa anclado (None = no anclado)"""
 
-    def __init__(self, app, mon, caja, capturar=None, estilo="palabras", ventana=None):
+    def __init__(self, app, mon, caja, capturar=None, estilo="palabras", ventana=None,
+                 ruta_exe=None, fuente=None, modo_texto=None):
         import mss
         self.app = app
+        self.ruta_exe = ruta_exe
+        self.fuente_juego = fuente
+        self.modo_fijo = modo_texto            # el del perfil del juego (None = el general)
+        self.natural = None                    # CapaNatural (traducción integrada en el juego)
+        self.pintor = None
+        self.viendo_original = False
         self.mon = dict(mon)
         self.caja = caja
         self.estilo = estilo                  # "palabras" (sobre cada línea) | "barra" (subtítulos)
@@ -535,11 +628,49 @@ class SesionEnVivo:
         self._capturar_ext = capturar          # para pruebas
         self._sct = None if capturar else mss.mss()
         self.capa = CapaEnVivo(app, self.mon, caja)
+        self.aplicar_modo()
         if ventana:
             self.titulo = titulo_ventana(ventana)
             self.capa.aviso = f"● EN VIVO: {self.titulo[:40]}  ·  Ctrl+Alt+X detener"
             self.capa.dibujar_marco()
         app.root.after(30, self._tick)
+
+    # ---------- modo de dibujo ----------
+    def modo_texto(self):
+        if self.estilo == "barra" or self.app.cfg.get("modo_vista") == "panel":
+            return "caja"
+        return self.modo_fijo or self.app.cfg.get("modo_texto", "natural")
+
+    def aplicar_modo(self):
+        """Natural/vidrio: una capa con transparencia real; caja: la capa clásica."""
+        modo = self.modo_texto()
+        if modo in ("natural", "vidrio"):
+            if self.natural is None:
+                import capa_natural
+                self.natural = capa_natural.CapaNatural(self.app)
+                self.pintor = capa_natural.Pintor(self.ruta_exe, self.fuente_juego)
+                if self.oculta or self.viendo_original:
+                    self.natural.visible(False)
+            self.capa.limpiar()
+        elif self.natural is not None:
+            self.natural.cerrar()
+            self.natural, self.pintor = None, None
+        self.firma = None
+        self.ref = None
+
+    def ver_original(self, si):
+        """Mientras se mantiene la tecla, se ve el texto del juego sin traducir."""
+        self.viendo_original = si
+        if self.natural is not None:
+            self.natural.visible(not si and not self.oculta)
+        try:
+            self.capa.c.itemconfigure("trad", state="hidden" if si else "normal")
+        except tk.TclError:
+            pass
+
+    def origen(self):
+        reg = self.region()
+        return reg["left"], reg["top"]
 
     # ---------- región a capturar ----------
     def region(self):
@@ -579,16 +710,23 @@ class SesionEnVivo:
             if not self.oculta:
                 self.oculta = True
                 self.capa.visible(False)     # se esconde, pero recuerda todo lo traducido
+                if self.natural is not None:
+                    self.natural.visible(False)
             return False
         rect = rect_cliente(self.ventana)
         if rect is None:
             return False
+        viejo = (self.mon["left"], self.mon["top"])
         if self.capa.mover(rect):
             self.mon = rect
             self.ref = None                  # se movió: volver a mirar
+            if self.natural is not None:
+                self.natural.mover(rect["left"] - viejo[0], rect["top"] - viejo[1])
         if self.oculta:
             self.oculta = False
             self.capa.visible(True)          # al volver, todo sigue traducido
+            if self.natural is not None and not self.viendo_original:
+                self.natural.visible(True)
             self.ref = None
         return True
 
@@ -601,13 +739,16 @@ class SesionEnVivo:
             visible = self._seguir_ventana()
             if visible and self._ticks % max(1, 2000 // self.intervalo) == 0:
                 self.capa.subir()
+                if self.natural is not None:
+                    self.natural.subir()
             if visible and not self.procesando and time.time() - self.ultimo_lanzamiento > 0.12:
                 img = self._capturar()
                 peq = miniatura(img)
                 # Si la imagen no cambió nada, no hace falta leer. Si cambió (aunque sea un
                 # fondo animado), se lee el TEXTO: lo que ya estaba traducido se conserva.
                 if (self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5
-                        or self.seguidor.necesita_mirar()):
+                        or self.seguidor.necesita_mirar()
+                        or (self.pintor is not None and self.pintor.pendiente)):
                     self._lanzar(img, peq)
         except Exception:
             log.exception("Bucle en vivo")
@@ -621,6 +762,7 @@ class SesionEnVivo:
         cfg = self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
         motor = self.app.motor
+        pintor, modo_texto = self.pintor, self.modo_texto()
 
         def tarea():
             t0 = time.perf_counter()
@@ -637,7 +779,15 @@ class SesionEnVivo:
                 vis = self.seguidor.visibles(dx, dy)
                 nuevos = [b for b in vis if b["id"] in {l.id for l in nuevas}]
                 motor.tiempos = (t1 - t0, time.perf_counter() - t1)
-                self.app.cola.put(("vivo", (self, vis, nuevos, time.perf_counter() - t0)))
+                piezas = None
+                if pintor is not None and modo_texto in ("natural", "vidrio"):
+                    try:
+                        piezas = pintor.componer(img, [l for l in self.seguidor.lineas if l.trad],
+                                                 [p["caja"] for p in pars], modo_texto)
+                    except Exception:
+                        log.exception("Componiendo la traducción natural")
+                        piezas = None
+                self.app.cola.put(("vivo", (self, vis, nuevos, time.perf_counter() - t0, piezas)))
             except Cancelado:
                 self.procesando = False
             except Exception as e:
@@ -645,13 +795,17 @@ class SesionEnVivo:
                 self.app.cola.put(("vivo_error", (self, str(e))))
         threading.Thread(target=tarea, daemon=True).start()
 
-    def resultado(self, bloques, nuevos, duracion):
+    def resultado(self, bloques, nuevos, duracion, piezas=None):
         """Llamado en el hilo de la interfaz con las líneas que siguen visibles."""
         self.procesando = False
         if not self.activa:
             return []
         self.ultima_duracion = duracion
         self.lecturas += 1
+        if self.natural is not None and piezas is not None:
+            self.natural.actualizar(piezas, self.origen())
+            self.bloques = bloques
+            return nuevos
         firma = [(b["id"], tuple(int(v) for v in b["caja"]), b["traduccion"]) for b in bloques]
         if firma != self.firma:
             if self.app.cfg["modo_vista"] == "panel" and self.estilo != "barra":
@@ -660,6 +814,8 @@ class SesionEnVivo:
                 self.capa.mostrar_barra(bloques)
             else:
                 self.capa.mostrar(bloques)
+            if self.viendo_original:
+                self.capa.c.itemconfigure("trad", state="hidden")
             self.firma = firma
         self.bloques = bloques
         return nuevos
@@ -670,6 +826,8 @@ class SesionEnVivo:
     def detener(self):
         self.activa = False
         self.capa.cerrar()
+        if self.natural is not None:
+            self.natural.cerrar()
         if self._sct is not None:
             try:
                 self._sct.close()

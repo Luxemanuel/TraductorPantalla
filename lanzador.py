@@ -9,7 +9,7 @@ Si "app" no existe, se usa la copia del código que viene dentro del .exe.
 import os
 import sys
 
-VERSION_BASE = 4
+VERSION_BASE = 5
 
 if getattr(sys, "frozen", False):
     _base = os.path.dirname(sys.executable)

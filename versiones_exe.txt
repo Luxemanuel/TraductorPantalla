@@ -1,13 +1,16 @@
 # Versiones probadas para fabricar el .exe
 av==19.0.2
+brotli==1.2.1
 ctranslate2==4.9.0
 faster-whisper==1.2.1
+fonttools==4.68.0
 huggingface_hub==2.4.0
 mss==10.2.0
 numpy==2.5.5
 onnxruntime==1.32.0
 pillow==13.0.0
 pynput==1.8.2
+pystray==0.19.5
 requests==2.34.2
 sentencepiece==0.2.3
 soundcard==0.4.6
