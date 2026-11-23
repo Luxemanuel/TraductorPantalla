@@ -106,6 +106,20 @@ jobs:
           if ($p.ExitCode -ne 0) { Write-Error "La autoprueba falló"; exit 1 }
           Remove-Item "$d\autoprueba.txt", "$d\registro.txt", "$d\voz_prueba.wav", "$d\historial.json" -ErrorAction SilentlyContinue
 
+      - name: Capturas de la prueba en el registro (para revisarlas)
+        if: always()
+        shell: pwsh
+        run: |
+          $d = "dist\Traductor de Pantalla\capturas_prueba"
+          if (Test-Path $d) {
+            Get-ChildItem "$d\*.png" | ForEach-Object {
+              Write-Host "===IMG $($_.Name)==="
+              $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+              for ($i = 0; $i -lt $b.Length; $i += 3000) { Write-Host ("B64 " + $b.Substring($i, [Math]::Min(3000, $b.Length - $i))) }
+              Write-Host "===FIN==="
+            }
+          }
+
       - name: Guardar las capturas de la prueba (para revisarlas)
         if: always()
         uses: actions/upload-artifact@v4
