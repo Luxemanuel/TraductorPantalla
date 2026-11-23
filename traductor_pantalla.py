@@ -1626,7 +1626,7 @@ def autoprueba_natural(m, lineas):
     try:
         app.estado("Listo. F1 = ayuda")
         r.deiconify()
-        r.geometry("+600+20")
+        r.geometry("+470+0")
         _foto_ventana(r, os.path.join(carpeta, "4_ventana_principal.png"))
         app.abrir_config()
         bombear(0.8)
