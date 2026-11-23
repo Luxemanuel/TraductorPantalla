@@ -185,7 +185,7 @@ class App:
         ttk.Label(f, text="ESTILO EN PANTALLA", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
         est = ttk.Frame(f)
         est.pack(fill="x")
-        self.v_estilo = tk.StringVar(value=self._estilo_actual())
+        self.v_estilo = tk.StringVar(r, value=self._estilo_actual())
         for i, (t, v) in enumerate((("Natural", "natural"), ("Vidrio", "vidrio"), ("Caja", "caja"),
                                     ("Panel", "panel"))):
             ttk.Radiobutton(est, text=t, value=v, variable=self.v_estilo, style="Toolbutton"
@@ -198,7 +198,7 @@ class App:
         ttk.Label(f, text="IDIOMAS", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
         idi = ttk.Frame(f)
         idi.pack(fill="x")
-        self.v_idioma = tk.StringVar(value=self.cfg["idioma_origen"])
+        self.v_idioma = tk.StringVar(r, value=self.cfg["idioma_origen"])
         self._origenes = {"Detectar (inglés y japonés)": "auto", "Inglés": "en", "Japonés": "ja"}
         self.cb_origen = ttk.Combobox(idi, state="readonly", width=24, values=list(self._origenes))
         self.cb_origen.pack(side="left")

@@ -153,7 +153,7 @@ class Pintor:
             else:
                 modo = estilo.modo_automatico(est)
             piezas.append({"id": l.id, "est": est, "trad": l.trad, "fuente": e["fuente"],
-                           "modo": modo, "jp": l.idioma == "ja"})
+                           "modo": modo, "jp": l.idioma == "ja", "caja_ocr": caja, "otras": ajenas})
         for k in list(self.lineas):
             if k not in vivos:
                 del self.lineas[k]

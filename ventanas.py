@@ -309,7 +309,7 @@ class VentanaConfig:
 
     # ---------- utilidades ----------
     def _var(self, clave, tipo=tk.StringVar):
-        var = tipo(value=self.cfg[clave])
+        var = tipo(self.win, value=self.cfg[clave])
         var.trace_add("write", lambda *_: self._vista_previa())
         self.v[clave] = var
         return var
@@ -369,7 +369,7 @@ class VentanaConfig:
     def _pestana_pantalla(self, nb):
         f = ttk.Frame(nb, padding=14)
         actual = "panel" if self.cfg["modo_vista"] == "panel" else self.cfg.get("modo_texto", "natural")
-        self.v_estilo = tk.StringVar(value=actual)
+        self.v_estilo = tk.StringVar(self.win, value=actual)
         self.v_estilo.trace_add("write", lambda *_: self._previa_estilo())
         for i, (valor, nombre, texto) in enumerate(self._ESTILOS):
             ttk.Radiobutton(f, text=nombre, value=valor, variable=self.v_estilo
@@ -424,6 +424,10 @@ class VentanaConfig:
                    ).pack(side="left", padx=2)
         ttk.Button(bot, text="Borrar", command=self._perfil_borrar).pack(side="right", padx=2)
         t.bind("<<TreeviewSelect>>", lambda e: self._perfil_sel())
+        self.lbl_sin_juegos = ttk.Label(marco, style="Tarjeta.TLabel", foreground=tema.TENUE, justify="center",
+                                        text="Todavía no hay juegos.\nAbre tu juego y pulsa "
+                                             f"{atajo_legible(self.cfg['atajos']['anclar'])} para anclar el "
+                                             "traductor: su perfil aparecerá aquí.")
         self._llenar_juegos()
         return f
 
@@ -442,6 +446,10 @@ class VentanaConfig:
                                                     "sí" if p.get("auto", True) else "no", modo, letra))
         if sel and t.exists(sel[0]):
             t.selection_set(sel[0])
+        if perf:
+            self.lbl_sin_juegos.place_forget()
+        else:
+            self.lbl_sin_juegos.place(relx=0.5, rely=0.45, anchor="center")
 
     def _perfil(self):
         sel = self.tabla_juegos.selection()
@@ -510,7 +518,7 @@ class VentanaConfig:
         f = ttk.Frame(nb, padding=14)
         self._fila(f, "Colores:", 0)
         self._esquemas = {v[0]: k for k, v in ESQUEMAS.items()}
-        self.v_esquema = tk.StringVar(value=ESQUEMAS[self.cfg["esquema"]][0])
+        self.v_esquema = tk.StringVar(self.win, value=ESQUEMAS[self.cfg["esquema"]][0])
         self.v_esquema.trace_add("write", lambda *_: self._vista_previa())
         ttk.Combobox(f, state="readonly", width=34, values=list(self._esquemas),
                      textvariable=self.v_esquema).grid(row=0, column=1, sticky="w")
@@ -545,15 +553,15 @@ class VentanaConfig:
 
     def _pestana_atajos(self, nb):
         f = ttk.Frame(nb, padding=14)
-        self.v_atajos_activos = tk.BooleanVar(value=self.cfg["atajos_activos"])
+        self.v_atajos_activos = tk.BooleanVar(self.win, value=self.cfg["atajos_activos"])
         ttk.Checkbutton(f, text="Activar atajos de teclado globales (funcionan en cualquier programa)",
                         variable=self.v_atajos_activos).grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
         self.v_at = {}
         for fila, (accion, (nombre, _)) in enumerate(ACCIONES.items(), start=1):
             at = self.cfg["atajos"][accion]
             ttk.Label(f, text=nombre + ":").grid(row=fila, column=0, sticky="w", pady=6, padx=(0, 10))
-            vs = {k: tk.BooleanVar(value=at[k]) for k in ("ctrl", "alt", "shift")}
-            vs["tecla"] = tk.StringVar(value=at["tecla"])
+            vs = {k: tk.BooleanVar(self.win, value=at[k]) for k in ("ctrl", "alt", "shift")}
+            vs["tecla"] = tk.StringVar(self.win, value=at["tecla"])
             for col, (k, t) in enumerate((("ctrl", "Ctrl"), ("alt", "Alt"), ("shift", "Mayús")), start=1):
                 ttk.Checkbutton(f, text=t, variable=vs[k]).grid(row=fila, column=col, padx=2)
             ttk.Combobox(f, state="readonly", width=5, values=TECLAS_ATAJO,
@@ -764,7 +772,7 @@ class EditorGlosario:
         self.cb.pack(side="left", padx=(4, 16))
         self.cb.bind("<<ComboboxSelected>>", lambda e: self.llenar())
         ttk.Label(arriba, text="Buscar:").pack(side="left")
-        self.v_buscar = tk.StringVar()
+        self.v_buscar = tk.StringVar(w)
         self.v_buscar.trace_add("write", lambda *_: self.llenar())
         ttk.Entry(arriba, textvariable=self.v_buscar, width=24).pack(side="left", padx=4)
 
@@ -790,7 +798,7 @@ class EditorGlosario:
         form.pack(fill="x")
         ttk.Label(form, text="Original:").grid(row=0, column=0, sticky="w")
         ttk.Label(form, text="Traducción:").grid(row=1, column=0, sticky="w")
-        self.v_o, self.v_t = tk.StringVar(), tk.StringVar()
+        self.v_o, self.v_t = tk.StringVar(w), tk.StringVar(w)
         self.e_o = ttk.Entry(form, textvariable=self.v_o, width=60)
         self.e_o.grid(row=0, column=1, sticky="we", pady=3)
         e_t = ttk.Entry(form, textvariable=self.v_t, width=60)
@@ -896,7 +904,7 @@ class VentanaHistorial:
         arriba = ttk.Frame(w, padding=(10, 10, 10, 4))
         arriba.pack(fill="x")
         ttk.Label(arriba, text="Buscar:").pack(side="left")
-        self.v_buscar = tk.StringVar()
+        self.v_buscar = tk.StringVar(w)
         self.v_buscar.trace_add("write", lambda *_: self.llenar())
         e = ttk.Entry(arriba, textvariable=self.v_buscar, width=30)
         e.pack(side="left", padx=(4, 16))

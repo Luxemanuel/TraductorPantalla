@@ -292,7 +292,8 @@ def analizar(arr, caja, otras=(), filas_ocr=None):
                 grosor = _grosor_contorno(m_rell, m_seg)
 
     # --- letra con contorno sobre fondo recargado: el relleno queda ENCERRADO por el contorno ---
-    if contorno is None and sombra is None:
+    # (en fondos lisos no: ahí los "huecos" son solo el interior de letras como o, e, a)
+    if contorno is None and sombra is None and rms >= 9:
         huecos = _huecos(texto) & en_caja
         if huecos.sum() > 0.2 * texto.sum():
             cols_h = crop[huecos]
@@ -305,7 +306,8 @@ def analizar(arr, caja, otras=(), filas_ocr=None):
             m_rell_h = np.zeros_like(texto)
             m_rell_h[huecos] = np.sqrt(((cols_h - color_h) ** 2).sum(1)) < 60
             if (m_rell_h.sum() > max(50, 0.08 * texto.sum()) and dispersion[j] < 32
-                    and np.linalg.norm(color_h - np.median(crop[texto], 0)) > 70):
+                    and np.linalg.norm(color_h - np.median(crop[texto], 0)) > 70
+                    and np.linalg.norm(color_h - np.median(crop[anillo], 0)) > 40):
                 m_seg = texto.copy()
                 contorno = tuple(int(v) for v in np.median(crop[texto], 0))
                 m_rell = m_rell_h
@@ -936,49 +938,43 @@ def modo_automatico(est, animado=False):
 # ============================================================================
 # 4) Espacio disponible y agrupación de líneas
 # ============================================================================
-def medir_espacio(arr, est):
-    """Fondo libre a la izquierda, derecha y abajo del texto (cuadros y botones lisos)."""
-    if est["fondo"] != "plano" or est["coef"] is None:
+def medir_espacio(arr, est, otras=()):
+    """Sitio libre (izquierda, derecha, abajo) alrededor del texto dentro de su cuadro: hasta
+    el borde del cuadro (una línea marcada que cruza la franja), otro texto o el borde de la
+    imagen. El dibujo borroso que se ve a través de un cuadro semitransparente no corta."""
+    if est.get("basico") or est["fondo"] != "plano":
         return (0, 0, 0)
     H, W = arr.shape[:2]
     cx0, cy0 = est["origen"]
-    x0, y0, x1, y1 = [v + o for v, o in zip(est["tinta"], (cx0, cy0, cx0, cy0))]
-    coef = est["coef"]
-    tol = max(20.0, 3 * est["rms"] + 12)
-    alto = max(4, y1 - y0)
-    filas = np.linspace(y0 + alto * 0.2, y1 - alto * 0.2, 5).astype(int).clip(0, H - 1)
-
-    def libre_horizontal(desde, hasta):
-        if hasta <= desde:
-            return 0
-        xs = np.arange(desde, hasta)
-        tramo = arr[filas][:, xs].astype(np.float32)
-        pred = coef[0] + (xs[None, :, None] - cx0) * coef[1] + (filas[:, None, None] - cy0) * coef[2]
-        malo = np.sqrt(((tramo - pred) ** 2).sum(2)) > tol
-        primero = np.where(malo.any(1), malo.argmax(1), len(xs))
-        return int(np.min(primero))
-
-    largo = int(1.5 * (x1 - x0)) + 40
-    der = libre_horizontal(x1 + 1, min(W, x1 + 1 + largo))
-    # para la izquierda se mide al revés (desde el texto hacia fuera)
-    xs = np.arange(max(0, x0 - largo), x0)[::-1]
-    if len(xs):
-        tramo = arr[filas][:, xs].astype(np.float32)
-        pred = coef[0] + (xs[None, :, None] - cx0) * coef[1] + (filas[:, None, None] - cy0) * coef[2]
-        malo = np.sqrt(((tramo - pred) ** 2).sum(2)) > tol
-        izq = int(np.min(np.where(malo.any(1), malo.argmax(1), len(xs))))
-    else:
-        izq = 0
-    # abajo: hasta dónde sigue el fondo liso bajo el texto
-    cols = np.linspace(x0, x1 - 1, 9).astype(int).clip(0, W - 1)
-    ys = np.arange(y1 + 1, min(H, y1 + 1 + 3 * alto))
-    if len(ys):
-        tramo = arr[ys][:, cols].astype(np.float32)
-        pred = coef[0] + (cols[None, :, None] - cx0) * coef[1] + (ys[:, None, None] - cy0) * coef[2]
-        malo = np.sqrt(((tramo - pred) ** 2).sum(2)) > tol
-        abajo = int(np.where(malo.any(0), malo.argmax(0), len(ys)).min())
-    else:
-        abajo = 0
+    x0, y0, x1, y1 = [int(v + o) for v, o in zip(est["tinta"], (cx0, cy0, cx0, cy0))]
+    alto = max(4.0, (y1 - y0) / max(1, len(est["filas"])))
+    umbral = max(26.0, 4 * est["rms"] + 10)
+    ys = np.linspace(y0 + alto * 0.15, y1 - alto * 0.15, 7).astype(int).clip(0, H - 1)
+    g = arr[ys].astype(np.int16).mean(2)
+    borde_v = (np.abs(np.diff(g, axis=1)) > umbral).sum(0) >= 5
+    der = W - 1 - x1
+    idx = np.nonzero(borde_v[min(W - 1, x1 + 3):])[0]
+    if len(idx):
+        der = min(der, int(idx[0]) + 3)
+    izq = x0
+    idx = np.nonzero(borde_v[:max(0, x0 - 3)][::-1])[0]
+    if len(idx):
+        izq = min(izq, int(idx[0]) + 3)
+    xs = np.linspace(x0, x1, 9).astype(int).clip(0, W - 1)
+    gc = arr[:, xs].astype(np.int16).mean(2)
+    borde_h = (np.abs(np.diff(gc, axis=0)) > umbral).sum(1) >= 6
+    abajo = H - 1 - y1
+    idx = np.nonzero(borde_h[min(H - 1, y1 + 2):])[0]
+    if len(idx):
+        abajo = min(abajo, int(idx[0]) + 2)
+    for o in otras:                                  # otros textos: no pisarlos
+        if o[1] < y1 and o[3] > y0:
+            if o[0] >= x1:
+                der = min(der, int(o[0]) - x1)
+            elif o[2] <= x0:
+                izq = min(izq, x0 - int(o[2]))
+        elif o[0] < x1 and o[2] > x0 and o[1] >= y1:
+            abajo = min(abajo, int(o[1]) - y1)
     margen = max(4, int(alto * 0.4))
     return (max(0, izq - margen), max(0, der - margen), max(0, abajo - 2))
 
@@ -1129,7 +1125,10 @@ def escribir(grupo, trad, fuente, arr, modo="natural", respaldo=None):
     alto_fila = float(np.median([b - a for a, b in filas]))
     paso = ((filas[-1][0] - filas[0][0]) / (len(filas) - 1)) if len(filas) > 1 else None
     centrado = est["alineacion"] == "centro"
-    espacio = medir_espacio(arr, grupo[-1]["est"])
+    propias = {p.get("caja_ocr") for p in grupo}
+    otras = {tuple(o) for p in grupo for o in p.get("otras", ()) if tuple(o) not in propias}
+    medidas = [medir_espacio(arr, p["est"], otras) for p in grupo]
+    espacio = (min(m[0] for m in medidas), min(m[1] for m in medidas), medidas[-1][2])
     if est["fondo"] == "textura" and centrado:
         # subtítulos o títulos sobre imagen: pueden crecer un poco y bajar a una 2ª línea
         espacio = (int((x1 - x0) * 0.15), int((x1 - x0) * 0.15), int(alto_fila * 1.3))
