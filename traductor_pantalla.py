@@ -1366,6 +1366,8 @@ def autoprueba():
             ok = autoprueba_anclado(m, lineas)
         if ok and envivo.ES_WINDOWS:
             ok = autoprueba_natural(m, lineas)
+        if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_instalador(lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
     except Exception:
         lineas.append(traceback.format_exc())
@@ -1499,6 +1501,47 @@ def autoprueba_anclado(m, lineas):
             w.destroy()
     r.withdraw()                  # que no quede encima de las pruebas siguientes
     return ok1 and ok2 and ok3 and oculto and vuelve and extra2 == 0
+
+
+def autoprueba_instalador(lineas):
+    """Windows: el instalador de versiones completas cambia el programa y conserva los datos
+    del usuario; si el paquete nuevo está roto, deja la versión anterior intacta."""
+    import shutil
+    import subprocess
+    import tempfile
+    import actualizar
+    lineas.append("--- Prueba INSTALADOR de versiones completas ---")
+    ok_total = True
+    for caso in ("bueno", "roto"):
+        raiz = tempfile.mkdtemp(prefix="traductor_prueba_")
+        base, nueva = os.path.join(raiz, "programa"), os.path.join(raiz, "nueva", "Traductor de Pantalla")
+        os.makedirs(os.path.join(base, "app"))
+        os.makedirs(os.path.join(nueva, "app"))
+        exe = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "whoami.exe")
+        shutil.copyfile(exe, os.path.join(base, "Traductor de Pantalla.exe"))
+        open(os.path.join(base, "app", "version.py"), "w").write("VERSION = 'vieja'")
+        for d in ("config.json", "memoria.sqlite", "perfiles.json"):
+            open(os.path.join(base, d), "w").write("mis datos")
+        if caso == "bueno":
+            shutil.copyfile(exe, os.path.join(nueva, "Traductor de Pantalla.exe"))
+        open(os.path.join(nueva, "app", "version.py"), "w").write("VERSION = 'nueva'")
+        open(os.path.join(nueva, "config.json"), "w").write("de fábrica")      # no debe pisar el tuyo
+        guion = actualizar.escribir_guion(nueva, base, pid=999999, nombre=f"prueba_instalar_{caso}.ps1")
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", guion],
+                       timeout=120, capture_output=True)
+        version_ahora = open(os.path.join(base, "app", "version.py")).read()
+        datos_ok = all(open(os.path.join(base, d)).read() == "mis datos"
+                       for d in ("config.json", "memoria.sqlite", "perfiles.json"))
+        exe_ok = os.path.isfile(os.path.join(base, "Traductor de Pantalla.exe"))
+        esperado = "nueva" if caso == "bueno" else "vieja"
+        ok = esperado in version_ahora and datos_ok and exe_ok
+        lineas.append(f"Instalador ({'paquete correcto' if caso == 'bueno' else 'paquete roto'}): versión "
+                      f"{'nueva' if 'nueva' in version_ahora else 'anterior'}, datos del usuario "
+                      f"{'intactos' if datos_ok else 'PERDIDOS'}, programa {'presente' if exe_ok else 'FALTA'}"
+                      f" → {'OK' if ok else 'FALLO'}")
+        ok_total = ok_total and ok
+        shutil.rmtree(raiz, ignore_errors=True)
+    return ok_total
 
 
 def _escena_prueba(lineas=("I never thought I'd see this place again.", "The lanterns still glow the same way."),

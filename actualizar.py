@@ -182,16 +182,22 @@ Start-Process -FilePath $exe -WorkingDirectory $base
 """
 
 
+def escribir_guion(carpeta_nueva, base=None, pid=None, nombre="traductor_instalar.ps1"):
+    """El guion de PowerShell que cambia los archivos del programa por los nuevos."""
+    base = base or nucleo.BASE
+    comillas = lambda t: t.replace("'", "''")
+    guion = _GUION.format(base=comillas(base), nueva=comillas(carpeta_nueva), pid=pid or os.getpid(),
+                          datos=", ".join("'" + d + "'" for d in DATOS))
+    ruta = os.path.join(tempfile.gettempdir(), nombre)
+    with open(ruta, "w", encoding="utf-8-sig") as f:
+        f.write(guion)
+    return ruta
+
+
 def instalar_paquete(carpeta_nueva, base=None):
     """Al cerrar el programa, cambia sus archivos por los nuevos (conservando tus datos) y lo
     vuelve a abrir. Si algo falla, deja la versión anterior tal cual estaba."""
-    base = base or nucleo.BASE
-    comillas = lambda t: t.replace("'", "''")
-    guion = _GUION.format(base=comillas(base), nueva=comillas(carpeta_nueva), pid=os.getpid(),
-                          datos=", ".join("'" + d + "'" for d in DATOS))
-    ruta = os.path.join(tempfile.gettempdir(), "traductor_instalar.ps1")
-    with open(ruta, "w", encoding="utf-8-sig") as f:
-        f.write(guion)
+    ruta = escribir_guion(carpeta_nueva, base)
     subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                       "-File", ruta], creationflags=0x08000000 | 0x00000008, close_fds=True)   # sin ventana, aparte
     os._exit(0)
