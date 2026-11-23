@@ -68,6 +68,7 @@ def aplicar(root, tam=10):
            darkcolor=[("pressed", VINO_OSCURO), ("active", SUPERFICIE_2)],
            foreground=[("disabled", APAGADO)])
     st.configure("Grande.TButton", padding=(14, pad + 3), anchor="w")
+    st.configure("Doble.TButton", padding=(12, pad), anchor="w", justify="left")
     st.configure("Acento.TButton", background=VINO, bordercolor=VINO, lightcolor=VINO, darkcolor=VINO)
     st.map("Acento.TButton",
            background=[("disabled", "#2a1419"), ("pressed", VINO_OSCURO), ("active", VINO_CLARO)],

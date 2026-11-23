@@ -117,7 +117,7 @@ class App:
         d.text((10, 14), "A", font=f, fill=(245, 238, 220))
         d.text((32, 22), "ñ", font=f, fill=(255, 210, 90))
         self._icono_pil = img
-        return ImageTk.PhotoImage(img)
+        return ImageTk.PhotoImage(img, master=self.root)
 
     def poner_icono(self, ventana):
         ventana.es_del_traductor = True       # marca las ventanas propias del programa
@@ -155,21 +155,30 @@ class App:
         ttk.Frame(f, style="Linea.TFrame", height=2).pack(fill="x", pady=(8, 12))
 
         self.botones = {}
-        textos = ((("anclar", "Anclar a un juego o programa"), ("zona", "Elegir zona en vivo"),
+        self._dobles = set()          # botones de la rejilla: nombre arriba, atajo abajo
+        textos = ((("anclar", "Anclar a un juego o programa"), ("zona", "Zona en vivo"),
                    ("subtitulos", "Subtítulos de pantalla"),
-                   ("voz", "Subtítulos de voz (audio)"), ("pantalla", "Pantalla completa en vivo"),
+                   ("voz", "Subtítulos de voz"), ("pantalla", "Pantalla completa"),
                    ("repetir", "Volver a la última zona"), ("portapapeles", "Traducir lo copiado"))
                   if VIVO else
                   (("pantalla", "Traducir pantalla completa"), ("zona", "Traducir una zona"),
                    ("repetir", "Repetir la última zona"), ("portapapeles", "Traducir lo copiado"),
-                   ("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz (audio)")))
-        for accion, texto in textos:
-            estilo_b = "Grande.Acento.TButton" if accion == ("anclar" if VIVO else "pantalla") else "Grande.TButton"
-            b = ttk.Button(f, style=estilo_b, command=lambda a=accion: self.accion(a))
-            b.pack(fill="x", pady=2)
+                   ("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz")))
+        principal = textos[0][0]
+        b = ttk.Button(f, style="Grande.Acento.TButton", command=lambda: self.accion(principal))
+        b.pack(fill="x", pady=(0, 3))
+        self.botones[principal] = (b, textos[0][1])
+        rej = ttk.Frame(f)
+        rej.pack(fill="x")
+        for i, (accion, texto) in enumerate(textos[1:]):
+            b = ttk.Button(rej, style="Doble.TButton", command=lambda a=accion: self.accion(a))
+            b.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 3) if i % 2 == 0 else (0, 0), pady=(0, 3))
             self.botones[accion] = (b, texto)
-        b = ttk.Button(f, style="Grande.TButton", command=self.detener)
-        b.pack(fill="x", pady=(2, 10))
+            self._dobles.add(accion)
+        rej.columnconfigure(0, weight=1, uniform="a")
+        rej.columnconfigure(1, weight=1, uniform="a")
+        b = ttk.Button(f, style="TButton", command=self.detener)
+        b.pack(fill="x", pady=(0, 10))
         self.botones["detener"] = (b, "■ Detener")
         self._textos_botones()
 
@@ -183,8 +192,8 @@ class App:
                             ).grid(row=0, column=i, sticky="we", padx=1)
             est.columnconfigure(i, weight=1, uniform="e")
         self.v_estilo.trace_add("write", lambda *_: self._cambiar_estilo_pantalla())
-        self.lbl_estilo = ttk.Label(f, style="Tenue.TLabel", wraplength=380, justify="left")
-        self.lbl_estilo.pack(anchor="w", pady=(4, 10))
+        self.lbl_estilo = ttk.Label(f, style="Tenue.TLabel", wraplength=470, justify="left")
+        self.lbl_estilo.pack(anchor="w", pady=(4, 8))
 
         ttk.Label(f, text="IDIOMAS", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
         idi = ttk.Frame(f)
@@ -235,8 +244,8 @@ class App:
         self.btn_novedad = ttk.Button(f, style="Grande.Acento.TButton", command=self._instalar_novedad)
         self.novedad = None
         self.barra_prog = ttk.Progressbar(f, mode="indeterminate")
-        self.barra_prog.pack(fill="x", pady=(12, 4))
-        self.lbl_estado = ttk.Label(f, text="Iniciando…", wraplength=380, justify="left")
+        self.barra_prog.pack(fill="x", pady=(10, 4))
+        self.lbl_estado = ttk.Label(f, text="Iniciando…", wraplength=470, justify="left")
         self.lbl_estado.pack(anchor="w")
 
         # teclado: Enter pulsa el botón enfocado
@@ -253,10 +262,10 @@ class App:
             return "panel"
         return self.cfg.get("modo_texto", "natural")
 
-    _EXPLICA = {"natural": "La traducción reemplaza al texto con la letra, los colores y el contorno del juego.",
-                "vidrio": "Desenfoca el texto original y escribe la traducción encima (fondos que se mueven).",
-                "caja": "Recuadro de color clásico sobre cada frase (colores en Ajustes → Apariencia).",
-                "panel": "La traducción sale en una ventana de texto aparte; el juego queda limpio."}
+    _EXPLICA = {"natural": "Reemplaza el texto con la letra, el color y el contorno del juego.",
+                "vidrio": "Desenfoca el original y escribe encima (fondos que se mueven).",
+                "caja": "Recuadro de color clásico (colores en Ajustes → Caja y panel).",
+                "panel": "La traducción va a una ventana de texto aparte."}
 
     def _explicar_estilo(self):
         self.lbl_estilo.configure(text=self._EXPLICA.get(self.v_estilo.get(), ""))
@@ -288,7 +297,10 @@ class App:
     def _textos_botones(self):
         for accion, (b, texto) in self.botones.items():
             atajo = atajo_legible(self.cfg["atajos"][accion]) if self.cfg["atajos_activos"] else ""
-            b.configure(text=f"{texto}    ({atajo})" if atajo else texto)
+            if accion in getattr(self, "_dobles", ()):
+                b.configure(text=f"{texto}\n{atajo}" if atajo else texto)
+            else:
+                b.configure(text=f"{texto}    ({atajo})" if atajo else texto)
 
     def _actualizar_botones(self):
         activo = self.listo and not self.ocupado
@@ -972,7 +984,7 @@ class App:
         w.geometry(f"{mon['width']}x{mon['height']}+{mon['left']}+{mon['top']}")
         w.attributes("-topmost", True)
         oscura = ImageEnhance.Brightness(img).enhance(0.5)
-        foto = ImageTk.PhotoImage(oscura)
+        foto = ImageTk.PhotoImage(oscura, master=w)
         c = tk.Canvas(w, highlightthickness=0, cursor="crosshair", bd=0)
         c.pack(fill="both", expand=True)
         c.create_image(0, 0, image=foto, anchor="nw")
@@ -999,7 +1011,7 @@ class App:
                 # mostrar la zona elegida sin oscurecer
                 caja = (min(x, e.x), min(y, e.y), max(x, e.x), max(y, e.y))
                 if caja[2] - caja[0] > 2 and caja[3] - caja[1] > 2:
-                    estado["ret"] = ImageTk.PhotoImage(brillante.crop(caja))
+                    estado["ret"] = ImageTk.PhotoImage(brillante.crop(caja), master=w)
                     c.delete("zona")
                     c.create_image(caja[0], caja[1], image=estado["ret"], anchor="nw", tags="zona")
                     c.tag_raise(estado["rect"])
@@ -1444,6 +1456,10 @@ def autoprueba_anclado(m, lineas):
     bombear(0.5)
     m.traducir_lote = original
     juego.destroy()
+    for w in r.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    r.withdraw()                  # que no quede encima de las pruebas siguientes
     return ok1 and ok2 and ok3 and oculto and vuelve and extra2 == 0
 
 
@@ -1512,6 +1528,7 @@ def autoprueba_natural(m, lineas):
     app.cfg["modo_texto"] = "natural"
     app.v_estilo.set("natural")
     r = app.root
+    r.withdraw()                  # que no tape el juego de prueba (pantalla de 1024 px)
 
     def bombear(segundos, hasta=lambda: False):
         fin = time.time() + segundos
@@ -1608,6 +1625,8 @@ def autoprueba_natural(m, lineas):
     # capturas de la interfaz (para revisar el diseño)
     try:
         app.estado("Listo. F1 = ayuda")
+        r.deiconify()
+        r.geometry("+600+20")
         _foto_ventana(r, os.path.join(carpeta, "4_ventana_principal.png"))
         app.abrir_config()
         bombear(0.8)

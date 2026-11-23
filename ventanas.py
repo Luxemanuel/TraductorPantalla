@@ -52,7 +52,7 @@ class Superposicion:
         w.geometry(f"{mon['width']}x{mon['height']}+{mon['left']}+{mon['top']}")
         w.attributes("-topmost", True)
         w.configure(bg="black", cursor="hand2")
-        self.fotos = (ImageTk.PhotoImage(img_traducida), ImageTk.PhotoImage(img_original))
+        self.fotos = (ImageTk.PhotoImage(img_traducida, master=w), ImageTk.PhotoImage(img_original, master=w))
         self.lbl = tk.Label(w, image=self.fotos[0], bd=0, highlightthickness=0)
         self.lbl.pack(fill="both", expand=True)
         self.lbl.bind("<Button-1>", self.cerrar)
@@ -391,7 +391,7 @@ class VentanaConfig:
         except Exception:
             nucleo.log.exception("Vista previa del estilo")
             return
-        self._foto_estilo = ImageTk.PhotoImage(img)
+        self._foto_estilo = ImageTk.PhotoImage(img, master=self.win)
         self.lbl_previa_estilo.configure(image=self._foto_estilo)
 
     # ---------- perfiles por juego ----------
@@ -703,7 +703,7 @@ class VentanaConfig:
         d.text((14, 92), "設定", font=fuente, fill=(255, 220, 120))
         bloques = [{"caja": (12, 20, 270, 50), "traduccion": "¡Bienvenido a la aldea!"},
                    {"caja": (12, 90, 60, 118), "traduccion": "Configuración"}]
-        self._foto = ImageTk.PhotoImage(nucleo.componer(img, bloques, c))
+        self._foto = ImageTk.PhotoImage(nucleo.componer(img, bloques, c), master=self.win)
         self.lbl_previa.configure(image=self._foto)
 
     def restablecer(self):
@@ -1160,7 +1160,7 @@ def muestra_estilo(modo, cfg):
     for y, t in ((6, "EN EL JUEGO"), (H + 14, "CON EL TRADUCTOR" + ("  (la traducción va al panel)" if modo == "panel" else ""))):
         d.rounded_rectangle((W - 8 - d.textlength(t, font=f) - 14, y, W - 8, y + 18), radius=6, fill=(122, 21, 48))
         d.text((W - 15, y + 9), t, font=f, fill=(237, 228, 211), anchor="rm")
-    return out
+    return out.resize((int(out.width * 0.8), int(out.height * 0.8)), Image.LANCZOS)
 
 
 @functools.lru_cache(maxsize=4)
