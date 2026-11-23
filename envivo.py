@@ -684,13 +684,19 @@ class SesionEnVivo:
         if self._capturar_ext:
             return self._capturar_ext()
         reg = self.region()
-        if not self.capa.excluida:
+        if not self.capa.excluida:            # Windows antiguo: esconder la capa un instante
             self.capa.esconder_un_momento()
+            if self.natural is not None and self.natural.visible_:
+                self.natural.visible(False)
+                self._natural_escondida = True
         try:
             shot = self._sct.grab(reg)
         finally:
             if not self.capa.excluida:
                 self.capa.reaparecer()
+                if getattr(self, "_natural_escondida", False):
+                    self._natural_escondida = False
+                    self.natural.visible(True)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         tam = (reg["width"], reg["height"])
         return img if img.size == tam else img.resize(tam, Image.LANCZOS)

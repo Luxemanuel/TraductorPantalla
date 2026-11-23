@@ -1543,8 +1543,8 @@ def autoprueba_natural(m, lineas):
 
     def listas():
         v = app.vivo
-        return (v is not None and v.natural is not None and len(v.natural.piezas) >= 2
-                and all(p.alfa >= 255 for p in v.natural.piezas.values()))
+        return (v is not None and v.natural is not None and len(v.natural.piezas) >= 1
+                and len(v.bloques) >= 2 and all(p.alfa >= 255 for p in v.natural.piezas.values()))
     ok1 = bombear(45, listas)
     v = app.vivo
     lineas.append(f"Natural en pantalla: {'OK' if ok1 else 'FALLO'} en {time.time() - t0:.1f} s · piezas "

@@ -619,7 +619,7 @@ class Motor:
             filas = self.lector.leer(imagen, modo, seguir)
             self.tiempos = (time.perf_counter() - t0, self.tiempos[1])
             return [{"caja": (p["x0"], p["y0"], p["x1"], p["y1"]), "t": p["t"],
-                     "idioma": "ja" if p["jp"] else "en"}
+                     "idioma": "ja" if p["jp"] else "en", "filas": p["filas"]}
                     for p in agrupar_parrafos(filas) if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
 
     # ---------- texto copiado ----------
