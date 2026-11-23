@@ -167,9 +167,14 @@ jobs:
         run: |
           $v = python -c "import version; print(version.VERSION)"
           $b = python -c "import version; print(version.BASE_MINIMA)"
-          '{"version": "' + $v + '", "base_minima": ' + $b + '}' | Out-File -Encoding ascii version.json
           Compress-Archive -Path "dist\Traductor de Pantalla\app\*.py" -DestinationPath actualizacion.zip -Force
+          # huellas SHA-256: el programa comprueba lo que descarga antes de instalarlo
+          $h1 = (Get-FileHash actualizacion.zip -Algorithm SHA256).Hash.ToLower()
+          $h2 = (Get-FileHash TraductorPantalla-Windows.zip -Algorithm SHA256).Hash.ToLower()
+          '{"version": "' + $v + '", "base_minima": ' + $b + ', "sha256_app": "' + $h1 + '", "sha256_paquete": "' + $h2 + '"}' | Out-File -Encoding ascii version.json
+          Get-Content version.json
           "VERSION=$v" >> $env:GITHUB_ENV
+          "SHA_PAQUETE=$h2" >> $env:GITHUB_ENV
 
       - name: Publicar en Releases (descarga directa)
         shell: pwsh
@@ -177,4 +182,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v$env:VERSION-build${{ github.run_number }}"
-          gh release create $tag TraductorPantalla-Windows.zip actualizacion.zip version.json --title "Traductor de Pantalla $env:VERSION (compilación ${{ github.run_number }})" --notes "Primera vez: descarga TraductorPantalla-Windows.zip, descomprímelo y abre 'Traductor de Pantalla.exe'. Si ya lo tienes, el programa se actualiza solo con el botón Actualizar."
+          gh release create $tag TraductorPantalla-Windows.zip actualizacion.zip version.json --title "Traductor de Pantalla $env:VERSION (compilación ${{ github.run_number }})" --notes "Primera vez: descarga TraductorPantalla-Windows.zip, descomprímelo y abre 'Traductor de Pantalla.exe'. Si ya lo tienes, el programa se actualiza solo con el botón Actualizar (también las versiones grandes) y comprueba cada descarga. Huella SHA-256 del paquete: $env:SHA_PAQUETE"

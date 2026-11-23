@@ -9,7 +9,11 @@ CÓMO ABRIRLO
   (crear acceso directo).
 
   Si Windows muestra "Windows protegió su PC": Más información >
-  Ejecutar de todas formas (sale porque el programa no tiene firma digital).
+  Ejecutar de todas formas. Sale solo con lo que bajas con el navegador:
+  desde entonces el programa se actualiza solo (también las versiones
+  grandes), comprueba cada descarga con su huella SHA-256 y Windows ya no
+  vuelve a avisar. Para que no salga ni la primera vez: clic derecho en el
+  .zip > Propiedades > marca "Desbloquear" > Aceptar, y luego descomprime.
 
 TRADUCCIÓN EN VIVO
   La traducción aparece encima del texto en una capa transparente que deja
@@ -17,18 +21,13 @@ TRADUCCIÓN EN VIVO
   solo, en menos de 1 segundo (lector de texto de Windows + traducción en
   línea; sin internet usa diccionarios guardados en tu PC).
 
-ESTILO EN PANTALLA (ventana principal)
-  · Natural: borra el texto del juego y escribe la traducción en su lugar,
-    con una letra igual o parecida (la del juego si la trae en su carpeta),
-    el mismo color, contorno y sombra. Si el fondo se mueve, esa frase usa
-    un vidrio esmerilado en vez de borrar.
-  · Vidrio, Caja (el recuadro clásico) o Panel (ventana de texto aparte).
-  Mantén pulsada F8 para ver el texto original.
-
-PERFILES POR JUEGO
-  Al anclar el traductor a un juego (Ctrl+Alt+W) se guarda su zona, estilo
-  y letra. La próxima vez que abras ese juego, la traducción empieza sola.
-  Se cambian en Ajustes > Juegos.
+CÓMO SE USA
+  Abre tu juego, pulsa Ctrl+Alt+W estando en él y marca la zona del texto
+  (o Enter para toda la ventana). La traducción ocupa el lugar del texto con
+  su misma letra, color y contorno; si el fondo se mueve, esa frase se
+  escribe sobre un vidrio esmerilado. Mantén pulsada F8 para ver el original.
+  La próxima vez que abras ese juego la traducción empieza sola, con la misma
+  zona y la misma letra (se cambian en Ajustes > Juegos).
 
 MEMORIA Y CORRECCIONES
   Lo traducido se recuerda entre sesiones (memoria.sqlite): lo repetido sale
@@ -36,21 +35,18 @@ MEMORIA Y CORRECCIONES
   guarda tu versión y se usa siempre.
 
 ATAJOS (funcionan en cualquier programa o juego)
-  Ctrl+Alt+Z  elegir una zona y traducirla en vivo
+  Ctrl+Alt+W  traducir el juego o programa que estás usando (otra vez = apagar)
   Ctrl+Alt+S  subtítulos de pantalla (marca la franja de subtítulos)
   Ctrl+Alt+A  subtítulos de VOZ: traduce lo que se escucha (otra vez = apagar)
-  Ctrl+Alt+T  toda la pantalla en vivo                  (otra vez = apagar)
-  Ctrl+Alt+R  volver a la última zona                    (otra vez = apagar)
   Ctrl+Alt+V  traducir lo que copiaste con Ctrl+C
   Ctrl+Alt+X  detener todo
-  Ctrl+Alt+W  anclar al juego o programa que estás usando
   Ctrl+Alt+Espacio  menú rápido junto al cursor (todas las acciones)
   F8 (mantener)     ver el texto original
   También hay un icono junto al reloj con todas las acciones.
 
 PRIMERA VEZ: LECTOR JAPONÉS
   El lector de texto es el de Windows. Si tu Windows no tiene el japonés,
-  el programa te avisa: Configuración > Traducción y subtítulos >
+  el programa te avisa: Ajustes > Traducción >
   "Instalar lectores de inglés y japonés" (gratis; pide permiso de
   administrador). Luego cierra y abre el traductor.
 
@@ -60,8 +56,10 @@ IDIOMA DE DESTINO
   usarlo sin internet, el diccionario se descarga solo la primera vez).
 
 ACTUALIZACIONES
-  El programa avisa cuando hay una versión nueva: un clic en "Actualizar"
-  descarga solo el código nuevo (menos de 1 MB) y se reinicia.
+  El programa avisa cuando hay una versión nueva: un clic en "Actualizar".
+  Las pequeñas (solo código, menos de 1 MB) se instalan al momento; las
+  grandes se descargan desde el programa y se instalan al cerrar, sin perder
+  tus ajustes, memoria, perfiles ni historial.
 
 CONSEJOS
   · Juegos: usa "ventana sin bordes" (borderless). En pantalla completa
@@ -69,8 +67,8 @@ CONSEJOS
   · Si sabes el idioma, márcalo (Inglés o Japonés) en vez de "Detectar".
   · Al abrir tarda unos segundos en preparar todo.
 
-Inglés y japonés mezclados se traducen a la vez con "Detectar solo".
-En la ventana principal tienes Historial, Mi glosario, Configuración
+Inglés y japonés mezclados se traducen a la vez con "Detectar".
+En la ventana principal tienes Historial, Mi glosario, Ajustes
 (colores, alto contraste, letra, atajos, voz…) y Ayuda (F1).
 
 Tus ajustes, glosario, historial, memoria y perfiles se guardan en esta

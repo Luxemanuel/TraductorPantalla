@@ -7,6 +7,7 @@ Traducción EN VIVO:
   · SesionEnVivo: vigila una zona (o la pantalla) varias veces por segundo y solo
     vuelve a leer/traducir cuando el contenido cambió y se quedó quieto.
 """
+import queue
 import sys
 import threading
 import time
@@ -454,12 +455,13 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
         self.texto, self.idioma, self.caja = p["t"], p["idioma"], p["caja"]
         self.filas = p.get("filas")
+        self.creada = ahora
         self.trad = None            # traducción que se muestra
         self.trad_de = None         # texto que se tradujo (para saber si hay que retraducir)
         self.visto = ahora
@@ -469,20 +471,61 @@ class Linea:
         self.nueva = True
 
 
+def _parecido(a, b):
+    """(ratio, cubierto): parecido general y fracción de 'a' que aparece, en orden, en 'b'."""
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    m = sum(bl.size for bl in sm.get_matching_blocks())
+    return 2.0 * m / max(1, len(a) + len(b)), m / max(1, len(a))
+
+
+def _pisa(a, b):
+    """¿Las dos cajas ocupan casi el mismo sitio?"""
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    return ix > 0 and iy > 0 and ix * iy > 0.3 * min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+
+
 class Seguidor:
     """Empareja lo que lee el lector en cada vistazo con las líneas que ya conoce:
       · la misma línea (aunque se mueva, cambie el fondo o se lea una letra distinta)
         conserva su traducción y no se vuelve a traducir;
-      · si una parte queda tapada (un kanji), se mantiene la versión completa conocida;
-      · si aparece una versión más completa (texto que termina de escribirse), se adopta
-        cuando se confirma dos veces;
-      · una línea desaparece solo cuando deja de verse un rato."""
+      · si una parte queda tapada (un kanji), se mantiene la versión completa conocida,
+        pero solo si se sigue viendo al menos la mitad: unas pocas letras de una frase
+        NUEVA en el mismo sitio no se confunden con la anterior;
+      · cuando aparece otro texto en el sitio de una línea, la anterior se quita al momento;
+      · una línea que se fue y vuelve enseguida recupera su traducción sin esperar."""
 
-    def __init__(self, gracia=0.6):
+    RECIENTES_SEG = 30.0
+
+    def __init__(self, gracia=0.35):
         self.lineas = []
         self.gracia = gracia
+        self.recientes = {}          # texto normalizado -> (Linea, cuándo se fue)
+
+    def _misma(self, np_, p, l):
+        nl = _n(l.texto)
+        if not nl:
+            return None
+        ratio, cubre = _parecido(np_, nl)
+        cx, cy = (p["caja"][0] + p["caja"][2]) / 2, (p["caja"][1] + p["caja"][3]) / 2
+        lx, ly = (l.caja[0] + l.caja[2]) / 2, (l.caja[1] + l.caja[3]) / 2
+        alto = max(10, l.caja[3] - l.caja[1])
+        cerca = abs(cy - ly) < alto * 1.2 and abs(cx - lx) < (l.caja[2] - l.caja[0]) * 0.8 + alto
+        if (ratio >= 0.72                                                     # la misma, con algún error
+                or (cerca and cubre >= 0.85 and len(np_) >= 0.5 * len(nl))    # una parte tapada
+                or (cerca and not l.confirmada and np_.startswith(nl[:max(1, len(nl) - 2)]))):   # escribiéndose
+            return ratio + (0.15 if cerca else 0)
+        return None
+
+    def _retirar(self, l, ahora):
+        self.lineas.remove(l)
+        if l.trad:
+            self.recientes[_n(l.texto)] = (l, ahora)
 
     def actualizar(self, pars, ahora):
+        for k, (l, t) in list(self.recientes.items()):
+            if ahora - t > self.RECIENTES_SEG:
+                del self.recientes[k]
         libres = list(self.lineas)
         vistas = set()
         for p in pars:
@@ -491,33 +534,37 @@ class Seguidor:
                 continue
             mejor, puntos = None, 0.0
             for l in libres:
-                if l.idioma != p["idioma"]:
-                    continue
-                nl = _n(l.texto)
-                sim = difflib.SequenceMatcher(None, np_, nl, autojunk=False).ratio()
-                # también vale si una es parte de la otra (texto tapado o a medio escribir)
-                if np_ in nl or nl in np_:
-                    sim = max(sim, 0.75)
-                cx, cy = (p["caja"][0] + p["caja"][2]) / 2, (p["caja"][1] + p["caja"][3]) / 2
-                lx, ly = (l.caja[0] + l.caja[2]) / 2, (l.caja[1] + l.caja[3]) / 2
-                alto = max(10, l.caja[3] - l.caja[1])
-                cerca = abs(cy - ly) < alto * 1.2 and abs(cx - lx) < (l.caja[2] - l.caja[0]) * 0.8 + alto
-                total = sim + (0.15 if cerca else 0)
-                if sim >= 0.55 and total > puntos:
-                    mejor, puntos = l, total
+                if l.idioma == p["idioma"]:
+                    pt = self._misma(np_, p, l)
+                    if pt is not None and pt > puntos:
+                        mejor, puntos = l, pt
             if mejor is None:
-                l = Linea(p, ahora)
-                self.lineas.append(l)
-                vistas.add(l.id)
+                # ¿es un trozo de una línea ya vista en este mismo vistazo (renglones mal agrupados)?
+                if any(l.id in vistas and _pisa(p["caja"], l.caja) and _parecido(np_, _n(l.texto))[1] >= 0.85
+                       for l in self.lineas):
+                    continue
+                # ¿una línea que se acaba de ir y vuelve? (recupera su traducción al instante)
+                for k, (l, t) in list(self.recientes.items()):
+                    if l.idioma == p["idioma"] and _parecido(np_, k)[0] >= 0.9:
+                        del self.recientes[k]
+                        l.caja, l.filas, l.visto, l.fallos = p["caja"], p.get("filas"), ahora, 0
+                        self.lineas.append(l)
+                        vistas.add(l.id)
+                        break
+                else:
+                    l = Linea(p, ahora)
+                    self.lineas.append(l)
+                    vistas.add(l.id)
                 continue
             libres.remove(mejor)
             vistas.add(mejor.id)
             l = mejor
-            if max(abs(a - b) for a, b in zip(p["caja"], l.caja)) > 3:   # ignorar temblores de 1-3 px
+            nl = _n(l.texto)
+            completa = len(np_) >= 0.9 * len(nl)
+            if completa and max(abs(a - b) for a, b in zip(p["caja"], l.caja)) > 3:   # ignorar temblores
                 l.caja = p["caja"]
                 l.filas = p.get("filas")
             l.visto, l.fallos = ahora, 0
-            nl = _n(l.texto)
             if not l.confirmada:
                 # primera confirmación: el texto debe repetirse casi igual
                 if difflib.SequenceMatcher(None, np_, nl, autojunk=False).ratio() >= 0.9:
@@ -525,7 +572,7 @@ class Seguidor:
                     if len(np_) > len(nl):
                         l.texto, l.filas = p["t"], p.get("filas")
                 else:
-                    l.texto, l.filas = p["t"], p.get("filas")     # aún se está escribiendo
+                    l.texto, l.caja, l.filas = p["t"], p["caja"], p.get("filas")     # aún se está escribiendo
             elif np_ != nl and len(np_) >= len(nl) + 2:
                 # versión más completa: adoptarla si se ve dos veces
                 if l.candidato is not None and _n(l.candidato) == np_:
@@ -534,31 +581,29 @@ class Seguidor:
                     l.candidato, l.conf_cand = p["t"], 1
                 if l.conf_cand >= 2:
                     l.texto, l.candidato, l.conf_cand = p["t"], None, 0
-                    l.filas = p.get("filas")
+                    l.caja, l.filas = p["caja"], p.get("filas")
             # si es igual o más corta (letra tapada / mal leída): se conserva la conocida
         quitadas = False
         vistas_l = [l for l in self.lineas if l.id in vistas]
-
-        def pisa(a, b):          # ¿b ocupa el lugar de a?
-            ix = min(a[2], b[2]) - max(a[0], b[0])
-            iy = min(a[3], b[3]) - max(a[1], b[1])
-            return ix > 0 and iy > 0 and ix * iy > 0.3 * min((a[2] - a[0]) * (a[3] - a[1]),
-                                                             (b[2] - b[0]) * (b[3] - b[1]))
         for l in list(self.lineas):
-            if l.id not in vistas and any(v.confirmada and pisa(l.caja, v.caja) for v in vistas_l):
-                self.lineas.remove(l)        # otro texto ocupa su lugar: fue reemplazada
+            if l.id in vistas:
+                continue
+            if any(_pisa(l.caja, v.caja) for v in vistas_l):
+                self._retirar(l, ahora)          # otro texto ocupa su sitio: fue reemplazada
                 quitadas = True
                 continue
-            if l.id not in vistas:
-                l.fallos += 1
-                if ahora - l.visto > self.gracia and l.fallos >= 2:
-                    self.lineas.remove(l)
-                    quitadas = True
+            l.fallos += 1
+            if ahora - l.visto > self.gracia and l.fallos >= 2:
+                self._retirar(l, ahora)
+                quitadas = True
         return quitadas
 
     def necesita_mirar(self):
-        """Hay algo por confirmar (línea nueva, versión más completa o línea que se fue)."""
-        return any(l.fallos > 0 or not l.confirmada or l.candidato for l in self.lineas)
+        """Hay algo por confirmar (línea nueva, versión más completa o línea que se fue). Lo que
+        lleva más de 3 s sin confirmarse es ruido (algo animado), no texto: no obliga a mirar."""
+        ahora = time.time()
+        return any(l.fallos > 0 or l.candidato or (not l.confirmada and ahora - l.creada < 3.0)
+                   for l in self.lineas)
 
     def pendientes(self):
         """Líneas confirmadas que hay que (re)traducir."""
@@ -599,12 +644,12 @@ class SesionEnVivo:
     ventana: hwnd del programa anclado (None = no anclado)"""
 
     def __init__(self, app, mon, caja, capturar=None, estilo="palabras", ventana=None,
-                 ruta_exe=None, fuente=None, modo_texto=None):
+                 ruta_exe=None, fuente=None, letras=None):
         import mss
         self.app = app
         self.ruta_exe = ruta_exe
         self.fuente_juego = fuente
-        self.modo_fijo = modo_texto            # el del perfil del juego (None = el general)
+        self.letras = letras                   # letras ya decididas para este juego (perfil)
         self.natural = None                    # CapaNatural (traducción integrada en el juego)
         self.pintor = None
         self.viendo_original = False
@@ -615,7 +660,13 @@ class SesionEnVivo:
         self.tipo = "subtitulos" if estilo == "barra" else ("zona" if caja else "pantalla")
         self.umbral = 0.002 if caja else 0.0008
         self.intervalo = 100 if estilo == "barra" else 150
-        self.seguidor = Seguidor(gracia=0.3 if estilo == "barra" else 0.6)
+        self.seguidor = Seguidor(gracia=0.25 if estilo == "barra" else 0.35)
+        # la traducción va en su propio hilo: leer la pantalla nunca espera a internet
+        self.cerrojo = threading.RLock()
+        self._pedidos = {}                    # id de línea -> texto que se está traduciendo
+        self._cola_trad = queue.Queue()
+        self._nuevos = []                     # líneas recién traducidas (historial y voz)
+        self.repintar = False                 # llegaron traducciones: componer aunque nada cambie
         self.activa = True
         self.procesando = False
         self.ref = None
@@ -629,6 +680,7 @@ class SesionEnVivo:
         self._sct = None if capturar else mss.mss()
         self.capa = CapaEnVivo(app, self.mon, caja)
         self.aplicar_modo()
+        threading.Thread(target=self._traductor, daemon=True).start()
         if ventana:
             self.titulo = titulo_ventana(ventana)
             self.capa.aviso = f"● EN VIVO: {self.titulo[:40]}  ·  Ctrl+Alt+X detener"
@@ -637,26 +689,53 @@ class SesionEnVivo:
 
     # ---------- modo de dibujo ----------
     def modo_texto(self):
-        if self.estilo == "barra" or self.app.cfg.get("modo_vista") == "panel":
-            return "caja"
-        return self.modo_fijo or self.app.cfg.get("modo_texto", "natural")
+        """Subtítulos: franja clásica. Todo lo demás: la traducción integrada en el juego."""
+        return "caja" if self.estilo == "barra" else "natural"
 
     def aplicar_modo(self):
-        """Natural/vidrio: una capa con transparencia real; caja: la capa clásica."""
-        modo = self.modo_texto()
-        if modo in ("natural", "vidrio"):
-            if self.natural is None:
-                import capa_natural
-                self.natural = capa_natural.CapaNatural(self.app)
-                self.pintor = capa_natural.Pintor(self.ruta_exe, self.fuente_juego)
-                if self.oculta or self.viendo_original:
-                    self.natural.visible(False)
+        if self.modo_texto() == "natural" and self.natural is None:
+            import capa_natural
+            self.natural = capa_natural.CapaNatural(self.app)
+            self.pintor = capa_natural.Pintor(self.ruta_exe, self.fuente_juego, self.letras)
+            if self.oculta or self.viendo_original:
+                self.natural.visible(False)
             self.capa.limpiar()
-        elif self.natural is not None:
-            self.natural.cerrar()
-            self.natural, self.pintor = None, None
         self.firma = None
         self.ref = None
+
+    # ---------- traducción en segundo plano ----------
+    def _traductor(self):
+        while self.activa:
+            try:
+                lote = self._cola_trad.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            while True:                                   # juntar todo lo que esté esperando
+                try:
+                    lote += self._cola_trad.get_nowait()
+                except queue.Empty:
+                    break
+            t0 = time.perf_counter()
+            try:
+                trads = self.app.motor.traducir_lote([(t, i) for _, t, i in lote])
+            except Exception:
+                log.exception("Traduciendo en segundo plano")
+                trads = [None] * len(lote)
+            self.app.motor.tiempos = (self.app.motor.tiempos[0], time.perf_counter() - t0)
+            with self.cerrojo:
+                validas = []
+                for (l, texto, _), tr in zip(lote, trads):
+                    if self._pedidos.get(l.id) == texto:
+                        del self._pedidos[l.id]
+                    if l.texto == texto:                  # sigue siendo el mismo texto
+                        validas.append((l, tr))
+                self._nuevos += self.seguidor.asignar([l for l, _ in validas], [tr for _, tr in validas])
+            self.repintar = True
+
+    def ocupada(self):
+        """¿Hay texto cambiando o traducciones por llegar? (entonces se mira más a menudo)"""
+        return bool(self.repintar or self._pedidos or self.seguidor.necesita_mirar()
+                    or (self.pintor is not None and self.pintor.pendiente))
 
     def ver_original(self, si):
         """Mientras se mantiene la tecla, se ve el texto del juego sin traducir."""
@@ -743,27 +822,27 @@ class SesionEnVivo:
         try:
             self._ticks = getattr(self, "_ticks", 0) + 1
             visible = self._seguir_ventana()
-            if visible and self._ticks % max(1, 2000 // self.intervalo) == 0:
+            if visible and self._ticks % 15 == 0:
                 self.capa.subir()
                 if self.natural is not None:
                     self.natural.subir()
-            if visible and not self.procesando and time.time() - self.ultimo_lanzamiento > 0.12:
+            ocupada = self.ocupada()
+            if visible and not self.procesando and time.time() - self.ultimo_lanzamiento > (0.05 if ocupada else 0.12):
                 img = self._capturar()
                 peq = miniatura(img)
                 # Si la imagen no cambió nada, no hace falta leer. Si cambió (aunque sea un
                 # fondo animado), se lee el TEXTO: lo que ya estaba traducido se conserva.
-                if (self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5
-                        or self.seguidor.necesita_mirar()
-                        or (self.pintor is not None and self.pintor.pendiente)):
+                if self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5 or ocupada:
                     self._lanzar(img, peq)
         except Exception:
             log.exception("Bucle en vivo")
         if self.activa:
-            self.app.root.after(self.intervalo, self._tick)
+            self.app.root.after(60 if self.ocupada() else self.intervalo, self._tick)
 
     def _lanzar(self, img, peq):
         self.procesando = True
         self.ref = peq
+        self.repintar = False
         self.ultimo_lanzamiento = time.time()
         cfg = self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
@@ -775,21 +854,24 @@ class SesionEnVivo:
             try:
                 pars = motor.leer_parrafos(img, modo, omitir, seguir=lambda: self.activa)
                 t1 = time.perf_counter()
-                quitadas = self.seguidor.actualizar(pars, time.time())
-                pend = self.seguidor.pendientes()
-                nuevas = []
-                if pend:
-                    trads = motor.traducir_lote([(l.texto, l.idioma) for l in pend])
-                    nuevas = self.seguidor.asignar(pend, trads)
                 dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
-                vis = self.seguidor.visibles(dx, dy)
-                nuevos = [b for b in vis if b["id"] in {l.id for l in nuevas}]
-                motor.tiempos = (t1 - t0, time.perf_counter() - t1)
+                with self.cerrojo:
+                    self.seguidor.actualizar(pars, time.time())
+                    pend = [l for l in self.seguidor.pendientes() if self._pedidos.get(l.id) != l.texto]
+                    for l in pend:
+                        self._pedidos[l.id] = l.texto
+                    if pend:
+                        self._cola_trad.put([(l, l.texto, l.idioma) for l in pend])
+                    vis = self.seguidor.visibles(dx, dy)
+                    traducidas = [l for l in self.seguidor.lineas if l.trad]
+                    nuevas, self._nuevos = self._nuevos, []
+                ids_nuevas = {l.id for l in nuevas}
+                nuevos = [b for b in vis if b["id"] in ids_nuevas]
+                motor.tiempos = (t1 - t0, motor.tiempos[1])
                 piezas = None
-                if pintor is not None and modo_texto in ("natural", "vidrio"):
+                if pintor is not None and modo_texto == "natural":
                     try:
-                        piezas = pintor.componer(img, [l for l in self.seguidor.lineas if l.trad],
-                                                 [p["caja"] for p in pars], modo_texto)
+                        piezas = pintor.componer(img, traducidas, [p["caja"] for p in pars])
                     except Exception:
                         log.exception("Componiendo la traducción natural")
                         piezas = None

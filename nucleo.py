@@ -91,7 +91,7 @@ ACCIONES = {
     # clave: (nombre visible, atajo por defecto)
     "pantalla": ("Traducir pantalla completa", {"ctrl": True, "alt": True, "shift": False, "tecla": "T"}),
     "zona": ("Traducir una zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "Z"}),
-    "anclar": ("Anclar a un programa", {"ctrl": True, "alt": True, "shift": False, "tecla": "W"}),
+    "anclar": ("Traducir un juego o programa", {"ctrl": True, "alt": True, "shift": False, "tecla": "W"}),
     "subtitulos": ("Subtítulos de pantalla (zona)", {"ctrl": True, "alt": True, "shift": False, "tecla": "S"}),
     "voz": ("Subtítulos de voz (audio)", {"ctrl": True, "alt": True, "shift": False, "tecla": "A"}),
     "repetir": ("Repetir la última zona", {"ctrl": True, "alt": True, "shift": False, "tecla": "R"}),
@@ -101,6 +101,10 @@ ACCIONES = {
     "original": ("Ver el original (mantener pulsada)", {"ctrl": False, "alt": False, "shift": False, "tecla": "F8"}),
 }
 ACCIONES_MANTENER = {"original"}      # se vigilan mientras están pulsadas, no al pulsarlas
+# Acciones que se ofrecen: en Windows el camino es anclar el traductor al juego (el perfil
+# recuerda la zona); en otros sistemas no hay modo en vivo y se traduce una zona o la pantalla.
+ACCIONES_VIVO = ["anclar", "subtitulos", "voz", "portapapeles", "detener", "menu", "original"]
+ACCIONES_FIJO = ["zona", "pantalla", "subtitulos", "voz", "portapapeles", "detener"]
 
 DEFAULTS = {
     "idioma_origen": "auto",          # auto | en | ja
@@ -128,8 +132,6 @@ DEFAULTS = {
     "subtitulo_original": True,       # mostrar también el texto original pequeño
     "guardar_historial": True,        # conservar el historial al cerrar
     "historial_max": 300,             # entradas como máximo
-    "modo_texto": "natural",          # natural (integrada en el juego) | vidrio | caja (clásica)
-    "fundido": True,                  # aparecer/desaparecer suave
     "memoria": True,                  # recordar traducciones entre sesiones
     "perfiles_auto": True,            # traducir solo al abrir un juego con perfil
     "bandeja": True,                  # icono junto al reloj

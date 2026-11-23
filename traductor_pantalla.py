@@ -20,14 +20,15 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageTk
 
 import nucleo
-from nucleo import (ACCIONES, ACCIONES_MANTENER, TAM_INTERFAZ, Motor, Voz, Cancelado, atajo_legible,
-                    atajo_pynput, log)
+from nucleo import (ACCIONES, ACCIONES_MANTENER, ACCIONES_VIVO, ACCIONES_FIJO, TAM_INTERFAZ, Motor, Voz,
+                    Cancelado, atajo_legible, atajo_pynput, log)
 import ventanas
 import envivo
 import tema
 
 # En Windows la traducción es "en vivo" (capa transparente que deja pasar los clics).
 VIVO = envivo.ES_WINDOWS or os.environ.get("TRADUCTOR_VIVO") == "1"
+ACCIONES_APP = ACCIONES_VIVO if VIVO else ACCIONES_FIJO
 
 PUERTO_INSTANCIA = 47653
 CANDADO = None          # socket que impide abrir el programa dos veces
@@ -100,6 +101,9 @@ class App:
         self.root.after(60, self._vigilar_tecla_original)
         if self.cfg.get("bandeja", True) and motor is None:
             self.root.after(800, self._poner_bandeja)
+        self.paquete_listo = None          # versión completa descargada, se instala al cerrar
+        if motor is None:                  # tras instalar una versión completa: borrar la copia vieja
+            self.root.after(120000, lambda: threading.Thread(target=self._limpiar_anterior, daemon=True).start())
         if motor is not None:          # motor ya cargado (autoprueba)
             self.listo = True
         else:
@@ -156,44 +160,34 @@ class App:
 
         self.botones = {}
         self._dobles = set()          # botones de la rejilla: nombre arriba, atajo abajo
-        textos = ((("anclar", "Anclar a un juego o programa"), ("zona", "Zona en vivo"),
-                   ("subtitulos", "Subtítulos de pantalla"),
-                   ("voz", "Subtítulos de voz"), ("pantalla", "Pantalla completa"),
-                   ("repetir", "Volver a la última zona"), ("portapapeles", "Traducir lo copiado"))
-                  if VIVO else
-                  (("pantalla", "Traducir pantalla completa"), ("zona", "Traducir una zona"),
-                   ("repetir", "Repetir la última zona"), ("portapapeles", "Traducir lo copiado"),
-                   ("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz")))
-        principal = textos[0][0]
-        b = ttk.Button(f, style="Grande.Acento.TButton", command=lambda: self.accion(principal))
+        if VIVO:
+            principal = ("anclar", "Traducir un juego o programa")
+            resto = (("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz"),
+                     ("portapapeles", "Traducir lo copiado"), ("detener", "■ Detener"))
+        else:
+            principal = ("zona", "Traducir una zona")
+            resto = (("pantalla", "Pantalla completa"), ("subtitulos", "Subtítulos de pantalla"),
+                     ("voz", "Subtítulos de voz"), ("portapapeles", "Traducir lo copiado"),
+                     ("detener", "■ Detener"))
+        b = ttk.Button(f, style="Grande.Acento.TButton", command=lambda a=principal[0]: self.accion(a))
         b.pack(fill="x", pady=(0, 3))
-        self.botones[principal] = (b, textos[0][1])
+        self.botones[principal[0]] = (b, principal[1])
+        if VIVO:
+            ttk.Label(f, style="Tenue.TLabel", wraplength=470, justify="left",
+                      text="Abre tu juego y pulsa el atajo (o este botón y luego haz clic en el juego). "
+                           "La traducción ocupa el lugar del texto, con su misma letra, y la próxima vez "
+                           "que abras ese juego empieza sola.").pack(anchor="w", pady=(2, 8))
         rej = ttk.Frame(f)
-        rej.pack(fill="x")
-        for i, (accion, texto) in enumerate(textos[1:]):
-            b = ttk.Button(rej, style="Doble.TButton", command=lambda a=accion: self.accion(a))
+        rej.pack(fill="x", pady=(0, 10))
+        for i, (accion, texto) in enumerate(resto):
+            b = ttk.Button(rej, style="Doble.TButton",
+                           command=(self.detener if accion == "detener" else (lambda a=accion: self.accion(a))))
             b.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 3) if i % 2 == 0 else (0, 0), pady=(0, 3))
             self.botones[accion] = (b, texto)
             self._dobles.add(accion)
         rej.columnconfigure(0, weight=1, uniform="a")
         rej.columnconfigure(1, weight=1, uniform="a")
-        b = ttk.Button(f, style="TButton", command=self.detener)
-        b.pack(fill="x", pady=(0, 10))
-        self.botones["detener"] = (b, "■ Detener")
         self._textos_botones()
-
-        ttk.Label(f, text="ESTILO EN PANTALLA", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
-        est = ttk.Frame(f)
-        est.pack(fill="x")
-        self.v_estilo = tk.StringVar(r, value=self._estilo_actual())
-        for i, (t, v) in enumerate((("Natural", "natural"), ("Vidrio", "vidrio"), ("Caja", "caja"),
-                                    ("Panel", "panel"))):
-            ttk.Radiobutton(est, text=t, value=v, variable=self.v_estilo, style="Toolbutton"
-                            ).grid(row=0, column=i, sticky="we", padx=1)
-            est.columnconfigure(i, weight=1, uniform="e")
-        self.v_estilo.trace_add("write", lambda *_: self._cambiar_estilo_pantalla())
-        self.lbl_estilo = ttk.Label(f, style="Tenue.TLabel", wraplength=470, justify="left")
-        self.lbl_estilo.pack(anchor="w", pady=(4, 8))
 
         ttk.Label(f, text="IDIOMAS", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
         idi = ttk.Frame(f)
@@ -253,35 +247,9 @@ class App:
         r.bind_class("TRadiobutton", "<Return>", lambda e: e.widget.invoke())
         r.bind_class("TCheckbutton", "<Return>", lambda e: e.widget.invoke())
         r.bind("<F1>", lambda e: ventanas.ventana_ayuda(self))
-        self._explicar_estilo()
         self._actualizar_botones()
 
-    # ---------- estilo en pantalla e idiomas ----------
-    def _estilo_actual(self):
-        if self.cfg["modo_vista"] == "panel":
-            return "panel"
-        return self.cfg.get("modo_texto", "natural")
-
-    _EXPLICA = {"natural": "Reemplaza el texto con la letra, el color y el contorno del juego.",
-                "vidrio": "Desenfoca el original y escribe encima (fondos que se mueven).",
-                "caja": "Recuadro de color clásico (colores en Ajustes → Caja y panel).",
-                "panel": "La traducción va a una ventana de texto aparte."}
-
-    def _explicar_estilo(self):
-        self.lbl_estilo.configure(text=self._EXPLICA.get(self.v_estilo.get(), ""))
-
-    def _cambiar_estilo_pantalla(self):
-        v = self.v_estilo.get()
-        if v == "panel":
-            self.cfg["modo_vista"] = "panel"
-        else:
-            self.cfg["modo_vista"] = "superpuesto"
-            self.cfg["modo_texto"] = v
-        self.guardar_cfg()
-        self._explicar_estilo()
-        if self.vivo is not None:
-            self.vivo.aplicar_modo()
-
+    # ---------- idiomas ----------
     def _sincronizar_origen(self):
         nombre = {v: k for k, v in self._origenes.items()}.get(self.v_idioma.get(), "Detectar (inglés y japonés)")
         if self.cb_origen.get() != nombre:
@@ -296,6 +264,9 @@ class App:
 
     def _textos_botones(self):
         for accion, (b, texto) in self.botones.items():
+            if accion not in self.cfg["atajos"]:
+                b.configure(text=texto)
+                continue
             atajo = atajo_legible(self.cfg["atajos"][accion]) if self.cfg["atajos_activos"] else ""
             if accion in getattr(self, "_dobles", ()):
                 b.configure(text=f"{texto}\n{atajo}" if atajo else texto)
@@ -307,7 +278,6 @@ class App:
         for accion in ("pantalla", "zona", "portapapeles", "anclar"):
             if accion in self.botones:
                 self.botones[accion][0].state(["!disabled"] if activo else ["disabled"])
-        self.botones["repetir"][0].state(["!disabled"] if activo and self.ultima_zona else ["disabled"])
         hay_algo = (self.ocupado or self.voz.hablando() or self._overlay_abierto() or self.selector
                     or self.vivo is not None or self.voz_subs is not None)
         self.botones["voz"][0].state(["!disabled"] if self.listo else ["disabled"])
@@ -364,7 +334,7 @@ class App:
         try:
             from pynput import keyboard
             mapa = {atajo_pynput(self.cfg["atajos"][a]): (lambda a=a: self.cola.put(("atajo", a)))
-                    for a in ACCIONES if a not in ACCIONES_MANTENER}
+                    for a in ACCIONES_APP if a not in ACCIONES_MANTENER}
             self._hk = keyboard.GlobalHotKeys(mapa)
             self._hk.daemon = True
             self._hk.start()
@@ -397,6 +367,8 @@ class App:
                     self._resultado_vivo(*dato)
                 elif tipo == "mostrar":
                     self.mostrar_principal()
+                elif tipo == "llamar":
+                    dato()
                 elif tipo == "abrir":
                     {"historial": self.abrir_historial, "config": self.abrir_config,
                      "salir": self.salir}.get(dato, lambda: None)()
@@ -443,15 +415,12 @@ class App:
         if accion == "menu":
             self.menu_rapido()
             return
-        if accion in ACCIONES_MANTENER:
+        if accion in ACCIONES_MANTENER or accion not in ACCIONES_APP:
             return
         if not self.listo:
             self.estado("Todavía estoy cargando, un momento…")
             return
         if self.ocupado or self.selector:
-            return
-        if accion == "repetir" and not self.ultima_zona:
-            self.estado("Primero elige una zona con «Traducir una zona».")
             return
         if accion == "portapapeles":
             self._traducir_copiado()
@@ -480,31 +449,13 @@ class App:
             else:
                 self.iniciar_voz()
             return
-        if self.vivo is not None and (
-                (accion == "pantalla" and self.vivo.tipo == "pantalla") or
-                (accion == "repetir" and self.ultima_zona and self.vivo.caja == self.ultima_zona[1])):
-            self.detener_vivo()
-            self.estado("Traducción en vivo detenida.")
-            return
-        if accion == "pantalla":
-            import mss
-            with mss.mss() as sct:
-                mon = self._monitor_actual(sct)
-            self.iniciar_vivo(mon, None)
-        elif accion == "repetir":
-            mon, caja = self.ultima_zona
-            hw = getattr(self, "ultima_ventana", None)
-            if hw:
-                rect = envivo.rect_cliente(hw)
-                if rect is None:
-                    self.estado("El programa anclado ya no está abierto.")
-                    return
-                mon = rect
-            self.iniciar_vivo(mon, caja, estilo=self.ultimo_estilo, ventana=hw)
-        elif accion == "anclar":
+        if accion == "anclar":
+            if self.vivo is not None and self.vivo.ventana and self.vivo.ventana == envivo.ventana_activa():
+                self.detener()                      # el mismo atajo, en el mismo juego: apagar
+                return
             self._anclar()
-        else:                                       # zona / subtítulos: congelar y elegir
-            self._estilo_zona = "barra" if accion == "subtitulos" else "palabras"
+        else:                                       # subtítulos: congelar y elegir la franja
+            self._estilo_zona = "barra"
             self.detener_vivo()
             self.voz.detener()
             self.ocupado = True
@@ -544,7 +495,7 @@ class App:
             self.vivo = envivo.SesionEnVivo(self, mon, caja, estilo=estilo, ventana=ventana,
                                             capturar=getattr(self, "capturar_vivo", None),
                                             ruta_exe=exe, fuente=perfil.get("fuente"),
-                                            modo_texto=perfil.get("modo_texto"))
+                                            letras=perfil.get("letras"))
         except Exception as e:
             log.exception("No se pudo iniciar el modo en vivo")
             self.vivo = None
@@ -656,6 +607,17 @@ class App:
             self.bandeja.cerrar()
             self.bandeja = None
 
+    def perfil_cambiado(self, clave):
+        """Se cambió la letra de un juego en Ajustes: si se está traduciendo, aplicarlo ya."""
+        v = self.vivo
+        if v is None or not v.ruta_exe or nucleo.clave_perfil(v.ruta_exe) != clave or v.pintor is None:
+            return
+        import capa_natural
+        p = self.perfiles.get(clave, {})
+        v.fuente_juego, v.letras = p.get("fuente"), p.get("letras")
+        v.pintor = capa_natural.Pintor(v.ruta_exe, v.fuente_juego, v.letras)
+        v.ref = None
+
     # ---------- corregir una traducción ----------
     def corregir_traduccion(self, entrada, nueva):
         nueva = nueva.strip()
@@ -686,8 +648,19 @@ class App:
             except tk.TclError:
                 pass
 
+    def _guardar_letras(self, sesion):
+        """Las letras decididas para el juego quedan en su perfil (la próxima vez, sin buscar)."""
+        p = sesion.pintor
+        clave = nucleo.clave_perfil(sesion.ruta_exe) if sesion.ruta_exe else None
+        if p is None or not p.cambios or clave not in self.perfiles:
+            return
+        p.cambios = False
+        self.perfiles[clave]["letras"] = p.exportar()
+        nucleo.guardar_perfiles(self.perfiles)
+
     def detener_vivo(self):
         if self.vivo is not None:
+            self._guardar_letras(self.vivo)
             self.vivo.detener()
             self.vivo = None
             self._ocultar_mis_ventanas(False)
@@ -699,14 +672,14 @@ class App:
             sesion.procesando = False
             return
         nuevos = sesion.resultado(bloques, nuevos, duracion, piezas)
+        if sesion.pintor is not None and sesion.pintor.cambios:
+            self._guardar_letras(sesion)
         if bloques:
             self.ultimos_bloques = bloques
         if nuevos:
             self.historial.agregar(nuevos, sesion.tipo)
             if self.cfg["voz_auto"]:
                 self.leer(ventanas.texto_de(nuevos))
-        if self.cfg["modo_vista"] == "panel" and bloques and nuevos:
-            self.panel.mostrar(bloques, enfocar=False)
         if sesion.lecturas <= 1 or nuevos:
             self._ocultar_mis_ventanas(True)     # por si se abrió una ventana nueva
         que = {"subtitulos": "subtítulos", "zona": "zona", "pantalla": "pantalla"}[sesion.tipo]
@@ -785,19 +758,31 @@ class App:
         self.btn_novedad.configure(text=f"⬆ Actualizar a la versión {novedad['version']}")
         self.btn_novedad.pack(fill="x", pady=(8, 0), before=self.barra_prog)
         self.estado(f"Hay una versión nueva ({novedad['version']})."
-                    + (" Necesita descargar el paquete completo." if novedad["necesita_base"]
-                       else " Es una actualización pequeña: un clic y listo."))
+                    + (" Es grande (trae librerías nuevas): se descarga e instala desde aquí."
+                       if novedad["necesita_base"] else " Es una actualización pequeña: un clic y listo."))
 
     def _instalar_novedad(self):
         n = self.novedad
         if not n:
             return
         if n["necesita_base"]:
-            if messagebox.askyesno("Actualización", f"La versión {n['version']} trae librerías nuevas: hay "
-                                   "que descargar el paquete completo una vez.\n\n¿Abrir la página de "
-                                   "descarga?", parent=self.root):
-                import webbrowser
-                webbrowser.open(n["pagina"])
+            if not (envivo.ES_WINDOWS and getattr(sys, "frozen", False) and n.get("url_paquete")):
+                if messagebox.askyesno("Actualización", f"La versión {n['version']} trae librerías nuevas: "
+                                       "hay que descargar el paquete completo.\n\n¿Abrir la página de "
+                                       "descarga?", parent=self.root):
+                    import webbrowser
+                    webbrowser.open(n["pagina"])
+                return
+            mb = (n.get("tam_paquete") or 0) / 1048576
+            if not messagebox.askyesno(
+                    "Actualización",
+                    f"La versión {n['version']} trae librerías nuevas: se descarga el paquete completo"
+                    f"{f' (unos {mb:.0f} MB)' if mb else ''} desde aquí, se comprueba y se instala al "
+                    "cerrar. Tus ajustes, memoria, perfiles e historial se conservan.\n\nPuedes seguir "
+                    "usando el traductor mientras se descarga. ¿Empezar?", parent=self.root):
+                return
+            self.btn_novedad.state(["disabled"])
+            self._descargar_paquete(n)
             return
         if not messagebox.askyesno("Actualización", f"¿Instalar la versión {n['version']} ahora?\n"
                                    "El traductor se cerrará y se volverá a abrir solo.", parent=self.root):
@@ -811,14 +796,66 @@ class App:
             log.exception("Aplicando actualización")
             self.estado(f"No se pudo actualizar: {e}", error=True)
             return
+        self._cerrar_para_actualizar()
+        actualizar.reiniciar()
+
+    def _descargar_paquete(self, n):
+        import actualizar
+        ultimo = [-1]
+
+        def progreso(hecho, total):
+            pct = int(100 * hecho / total) if total else 0
+            if pct != ultimo[0]:
+                ultimo[0] = pct
+                self.cola.put(("estado", f"Descargando la versión {n['version']}: {pct} % "
+                                         f"({hecho / 1048576:.0f} de {total / 1048576:.0f} MB)…"))
+
+        def tarea():
+            try:
+                carpeta = actualizar.descargar_paquete(n, progreso)
+                self.cola.put(("llamar", lambda: self._paquete_descargado(n, carpeta)))
+            except Exception as e:
+                log.exception("Descargando la versión completa")
+                self.cola.put(("llamar", lambda: (self.estado(f"No se pudo descargar la versión completa: {e}",
+                                                              error=True),
+                                                  self.btn_novedad.state(["!disabled"]))))
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _paquete_descargado(self, n, carpeta):
+        self.paquete_listo = carpeta
+        self.btn_novedad.pack_forget()
+        if messagebox.askyesno("Actualización", f"La versión {n['version']} está descargada y comprobada.\n\n"
+                               "¿Reiniciar ahora para terminar de instalarla? (Si dices que no, se "
+                               "instala al cerrar el traductor.)", parent=self.root):
+            self._instalar_paquete()
+        else:
+            self.estado(f"La versión {n['version']} se instalará al cerrar el traductor.")
+
+    def _instalar_paquete(self):
+        import actualizar
+        carpeta, self.paquete_listo = self.paquete_listo, None
+        self._cerrar_para_actualizar()
+        actualizar.instalar_paquete(carpeta)
+
+    def _cerrar_para_actualizar(self):
         self.detener_vivo()
         self.detener_voz()
+        self._quitar_bandeja()
         self.historial.guardar()
         self.guardar_cfg()
+        if self.motor.memoria is not None:
+            self.motor.memoria.cerrar()
         global CANDADO
         if CANDADO is not None:
             CANDADO.close()
-        actualizar.reiniciar()
+
+    @staticmethod
+    def _limpiar_anterior():
+        try:
+            import actualizar
+            actualizar.limpiar_anterior()
+        except Exception:
+            log.exception("Borrando la copia de la versión anterior")
 
     # ---------- idioma de destino ----------
     def _cambiar_destino(self):
@@ -1218,10 +1255,6 @@ class App:
         self._aplicar_tam_interfaz()
         self.root.attributes("-topmost", bool(nueva["siempre_visible"]))
         self.v_idioma.set(nueva["idioma_origen"])
-        if self.v_estilo.get() != self._estilo_actual():
-            self.v_estilo.set(self._estilo_actual())
-        elif self.vivo is not None:
-            self.vivo.aplicar_modo()
         if nueva.get("bandeja", True):
             self._poner_bandeja()
         else:
@@ -1238,6 +1271,11 @@ class App:
         self.estado("Configuración guardada.")
 
     def salir(self):
+        if self.paquete_listo:                 # una versión completa espera: instalarla al cerrar
+            try:
+                self._instalar_paquete()
+            except Exception:
+                log.exception("Instalando la versión completa al cerrar")
         try:
             if self._hk is not None:
                 self._hk.stop()
@@ -1463,9 +1501,11 @@ def autoprueba_anclado(m, lineas):
     return ok1 and ok2 and ok3 and oculto and vuelve and extra2 == 0
 
 
-def _escena_prueba():
+def _escena_prueba(lineas=("I never thought I'd see this place again.", "The lanterns still glow the same way."),
+                   variante=0, opacidad_caja=200):
     """Un cuadro de diálogo de novela visual (fondo con manchas, caja semitransparente,
-    nombre en una etiqueta y dos líneas con sombra) para probar el estilo natural."""
+    nombre en una etiqueta y líneas con sombra) para probar el estilo natural.
+    variante > 0 mueve las manchas del fondo (fondo animado)."""
     import estilo
     from PIL import ImageFilter
     W, H = 900, 300
@@ -1473,14 +1513,17 @@ def _escena_prueba():
     img = Image.merge("RGB", (g.point(lambda v: 36 + v * 160 // 255), g.point(lambda v: 24 + v * 80 // 255),
                               g.point(lambda v: 60 + v * 30 // 255)))
     d = ImageDraw.Draw(img)
+    dx = (variante * 97) % 300 - 150 if variante else 0
     for cx, cy, rr, col in ((90, 60, 80, (220, 120, 160)), (380, 40, 70, (90, 190, 210)),
                             (640, 80, 95, (240, 190, 90)), (820, 200, 70, (150, 90, 210)),
-                            (250, 230, 60, (90, 200, 120))):
+                            (250, 230, 60, (90, 200, 120)), (520, 210, 75, (230, 110, 90))):
+        cx = cx + (dx if cy > 150 else 0)
         d.ellipse((cx - rr, cy - rr, cx + rr, cy + rr), fill=col)
     img = img.filter(ImageFilter.GaussianBlur(16)).convert("RGBA")
     capa = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     dc = ImageDraw.Draw(capa)
-    dc.rounded_rectangle((30, 120, 870, 285), radius=16, fill=(24, 20, 48, 215), outline=(200, 190, 230, 180), width=2)
+    dc.rounded_rectangle((30, 120, 870, 285), radius=16, fill=(24, 20, 48, opacidad_caja), outline=(200, 190, 230, 180),
+                         width=2)
     dc.rounded_rectangle((50, 98, 190, 136), radius=8, fill=(122, 30, 60, 240))
     img.alpha_composite(capa)
     d = ImageDraw.Draw(img)
@@ -1488,9 +1531,10 @@ def _escena_prueba():
     f = estilo.cargar(nunito, 26, "ExtraLight") if nunito else nucleo.cargar_fuente("Arial", 26)
     fn = estilo.cargar(mont, 22, "SemiBold") if mont else nucleo.cargar_fuente("Arial", 22, True)
     d.text((70, 104), "Aria", font=fn, fill=(255, 225, 150))
-    for y, t in ((160, "I never thought I'd see this place again."), (202, "The lanterns still glow the same way.")):
-        d.text((62, y + 2), t, font=f, fill=(20, 16, 30))
-        d.text((60, y), t, font=f, fill=(232, 230, 238))
+    for y, t in zip((160, 202, 244), lineas):
+        if t:
+            d.text((62, y + 2), t, font=f, fill=(20, 16, 30))
+            d.text((60, y), t, font=f, fill=(232, 230, 238))
     return img.convert("RGB")
 
 
@@ -1525,8 +1569,6 @@ def autoprueba_natural(m, lineas):
     os.makedirs(carpeta, exist_ok=True)
     app = App(motor=m)
     app.cfg["modo_vista"] = "superpuesto"
-    app.cfg["modo_texto"] = "natural"
-    app.v_estilo.set("natural")
     r = app.root
     r.withdraw()                  # que no tape el juego de prueba (pantalla de 1024 px)
 
@@ -1568,9 +1610,9 @@ def autoprueba_natural(m, lineas):
                   f"{list(v.natural.piezas) if v and v.natural else None} · "
                   f"{[b['traduccion'] for b in v.bloques] if v else None}")
     if v is not None and v.pintor is not None:
-        lineas.append("  letras: " + "; ".join(
-            f"«{e['texto'][:22]}» → {os.path.basename(e['fuente'][0] or '?')} {e['fuente'][1] or ''} "
-            f"({e['puntos']:.2f}, fondo {e['est']['fondo']})" for e in v.pintor.lineas.values()))
+        lineas.append("  letras decididas: " + "; ".join(
+            f"{os.path.basename(d['ruta'] or '?')} {d['inst'] or ''} (parecido {d['puntos']:.2f})"
+            for d in v.pintor.decisiones))
 
     def captura(nombre):
         app.vivo.natural.permitir_captura(True)
@@ -1612,14 +1654,8 @@ def autoprueba_natural(m, lineas):
         d2 = diferencia(orig, escena)
         ok3 = d2 < 3
         lineas.append(f"Ver el original (tecla mantenida): {'OK' if ok3 else 'FALLO'} (cambio medio {d2:.1f})")
-        # vidrio
-        n0 = app.vivo.lecturas
-        app.v_estilo.set("vidrio")
-        bombear(15, lambda: app.vivo is not None and app.vivo.lecturas >= n0 + 2 and listas())
-        bombear(0.6)
-        captura("3_vidrio_real.png")
-        app.v_estilo.set("natural")
-        bombear(15, lambda: app.vivo is not None and app.vivo.lecturas >= n0 + 4 and listas())
+        ok4 = _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas)
+        ok3 = ok3 and ok4
     app.detener()
     bombear(0.6)
     # capturas de la interfaz (para revisar el diseño)
@@ -1630,9 +1666,9 @@ def autoprueba_natural(m, lineas):
         _foto_ventana(r, os.path.join(carpeta, "4_ventana_principal.png"))
         app.abrir_config()
         bombear(0.8)
+        app.config_win.nb.select(0)
+        _foto_ventana(app.config_win.win, os.path.join(carpeta, "5_ajustes_general.png"))
         app.config_win.nb.select(1)
-        _foto_ventana(app.config_win.win, os.path.join(carpeta, "5_ajustes_en_pantalla.png"))
-        app.config_win.nb.select(4)
         _foto_ventana(app.config_win.win, os.path.join(carpeta, "6_ajustes_juegos.png"))
         app.config_win.cancelar()
         juego.lift()
@@ -1650,6 +1686,83 @@ def autoprueba_natural(m, lineas):
             w.destroy()
     r.withdraw()
     return ok1 and ok2 and ok3
+
+
+def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
+    """El diálogo avanza solo (máquina de escribir): lo anterior se quita enseguida, lo nuevo
+    se traduce al terminar de escribirse, la letra no cambia y un fondo animado pasa a vidrio."""
+    def mostrar(img):
+        f = ImageTk.PhotoImage(img, master=juego)
+        lbl.configure(image=f)
+        lbl.foto = f
+
+    def en_pantalla():
+        v = app.vivo
+        if v is None or v.natural is None:
+            return {}
+        res = {}
+        for k, pz in v.natural.piezas.items():
+            if not pz.saliendo:
+                for x in k.split("-"):
+                    res[int(x)] = pz.alfa
+        return res
+
+    def id_de(palabra):
+        for b in (app.vivo.bloques if app.vivo else []):
+            if palabra in b["original"].lower() and b.get("traduccion"):
+                return b["id"]
+        return None
+    v = app.vivo
+    letras_a = {e["fuente"][:2] for e in v.pintor.lineas.values() if e.get("fuente")}
+    decisiones_a = len(v.pintor.decisiones)
+    ids_a = set(en_pantalla())
+    ok = True
+    frases = (("Do you remember the festival we had here?", "festival"),
+              ("Everyone was dancing until sunrise.", "sunrise"))
+    for frase, clave in frases:
+        antes = set(en_pantalla())
+        t0 = time.time()
+        quitada = None
+        for k in range(0, len(frase) + 1, 2):             # se escribe sola, ~40 letras por segundo
+            mostrar(_escena_prueba((frase[:k], "")))
+            bombear(0.05)
+            if quitada is None and not (antes & set(en_pantalla())):
+                quitada = time.time() - t0
+        if quitada is None:
+            bombear(2, lambda: not (antes & set(en_pantalla())))
+            quitada = (time.time() - t0) if not (antes & set(en_pantalla())) else None
+        t1 = time.time()
+        lista = bombear(8, lambda: (id_de(clave) is not None and en_pantalla().get(id_de(clave), 0) >= 255))
+        tarda = time.time() - t1
+        i = id_de(clave)
+        e = app.vivo.pintor.lineas.get(i) if (app.vivo and i is not None) else None
+        misma_letra = bool(e and e.get("fuente") and e["fuente"][:2] in letras_a)
+        lineas.append(f"Texto automático «{frase[:24]}…»: lo anterior se quitó "
+                      f"{'a los %.2f s' % quitada if quitada is not None else 'NUNCA'} de empezar; traducido "
+                      f"{'%.2f s después de escribirse' % tarda if lista else 'NO'}; "
+                      f"misma letra: {'sí' if misma_letra else 'NO'}")
+        ok = ok and lista and quitada is not None and quitada < 1.5 and misma_letra
+    nuevas = len(app.vivo.pintor.decisiones) - decisiones_a
+    lineas.append(f"Decisiones de letra nuevas durante el diálogo: {nuevas} (debe ser 0)")
+    ok = ok and nuevas == 0
+    # vuelve la escena original: recupera su traducción al instante (sin confirmar ni traducir)
+    mostrar(_escena_prueba())
+    t0 = time.time()
+    vuelve = bombear(5, lambda: ids_a and ids_a <= {i for i, a in en_pantalla().items() if a >= 255})
+    lineas.append(f"La frase anterior vuelve: {'traducida a los %.2f s' % (time.time() - t0) if vuelve else 'NO volvió'}")
+    # fondo que se mueve detrás del texto: esas frases pasan a vidrio y no se vuelven a traducir
+    t0, var = time.time(), 1
+    while time.time() - t0 < 3.0:
+        mostrar(_escena_prueba(variante=var, opacidad_caja=90))
+        var += 1
+        bombear(0.12)
+    con_vidrio = bool(app.vivo and app.vivo.pintor.vidrio)
+    sigue = bool(en_pantalla())
+    lineas.append(f"Fondo animado 3 s: vidrio {'sí' if con_vidrio else 'NO'}, la traducción sigue: "
+                  f"{'sí' if sigue else 'NO'}")
+    captura("3_fondo_animado.png")
+    mostrar(_escena_prueba())
+    return ok and sigue
 
 
 def autoprueba_vivo(m, lineas):

@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Actualizaciones ligeras: descarga solo el código nuevo (menos de 1 MB) desde
-GitHub Releases y reemplaza la carpeta "app". Si la actualización necesita una
-base nueva (librerías), avisa para descargar el paquete completo.
+Actualizaciones desde el propio programa (sin pasar por el navegador):
+  · ligeras: solo el código nuevo (menos de 1 MB), reemplaza la carpeta "app";
+  · completas: cuando la versión trae librerías nuevas, descarga el paquete entero, lo
+    comprueba y lo instala al cerrar (tus ajustes, memoria y perfiles se quedan).
+Todo se verifica con la huella SHA-256 que publica la compilación junto a cada versión.
 """
+import hashlib
 import io
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import zipfile
 
 import nucleo
@@ -16,6 +21,10 @@ import version
 from nucleo import log
 
 REPO = "Luxemanuel/TraductorPantalla"
+PAQUETE = "TraductorPantalla-Windows.zip"
+# lo que es tuyo y nunca se toca al instalar una versión completa
+DATOS = ["config.json", "glosario.json", "historial.json", "memoria.sqlite", "memoria.sqlite-wal",
+         "memoria.sqlite-shm", "perfiles.json", "fuentes_usuario", "registro.txt", "_actualizacion", "_anterior"]
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGINA = f"https://github.com/{REPO}/releases/latest"
 
@@ -44,20 +53,23 @@ def buscar():
     for rel in r.json():
         m = re.match(r"v(\d+\.\d+\.\d+)-build(\d+)", rel.get("tag_name", ""))
         assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+        tamanos = {a["name"]: a.get("size", 0) for a in rel.get("assets", [])}
         if not m or "version.json" not in assets or "actualizacion.zip" not in assets:
             continue
         clave = (_num(m.group(1)), int(m.group(2)))
         if mejor is None or clave > mejor[0]:
-            mejor = (clave, rel, assets)
+            mejor = (clave, rel, assets, tamanos)
     if mejor is None:
         return None
-    _, rel, assets = mejor
+    _, rel, assets, tamanos = mejor
     info = requests.get(assets["version.json"], timeout=10).json()
     if _num(info["version"]) <= _num(version.VERSION):
         return None
     return {"version": info["version"], "base_minima": int(info.get("base_minima", 0)),
             "url_app": assets["actualizacion.zip"], "pagina": rel.get("html_url", PAGINA),
-            "notas": rel.get("body", ""),
+            "notas": rel.get("body", ""), "sha256_app": info.get("sha256_app"),
+            "url_paquete": assets.get(PAQUETE), "sha256_paquete": info.get("sha256_paquete"),
+            "tam_paquete": tamanos.get(PAQUETE, 0),
             "necesita_base": int(info.get("base_minima", 0)) > version_base()}
 
 
@@ -80,11 +92,114 @@ def aplicar(datos_zip, carpeta_base=None):
     return app
 
 
+def _comprobar(datos_o_ruta, esperado):
+    """Compara la huella SHA-256 con la publicada. Sin huella publicada (versiones antiguas) se acepta."""
+    if not esperado:
+        return
+    h = hashlib.sha256()
+    if isinstance(datos_o_ruta, (bytes, bytearray)):
+        h.update(datos_o_ruta)
+    else:
+        with open(datos_o_ruta, "rb") as f:
+            for trozo in iter(lambda: f.read(1 << 20), b""):
+                h.update(trozo)
+    if h.hexdigest().lower() != str(esperado).lower():
+        raise RuntimeError("La descarga no coincide con la publicada (huella SHA-256 distinta). "
+                           "No se instaló nada.")
+
+
 def descargar_y_aplicar(novedad):
     import requests
     r = requests.get(novedad["url_app"], timeout=60)
     r.raise_for_status()
+    _comprobar(r.content, novedad.get("sha256_app"))
     return aplicar(r.content)
+
+
+# ---------------------------------------------------------------------------
+# Versión completa (cuando cambian las librerías)
+# ---------------------------------------------------------------------------
+def descargar_paquete(novedad, progreso=lambda hecho, total: None, base=None):
+    """Descarga el paquete completo, lo comprueba y lo descomprime en _actualizacion.
+    Devuelve la carpeta con el programa nuevo."""
+    import requests
+    base = base or nucleo.BASE
+    if not novedad.get("url_paquete"):
+        raise RuntimeError("Esta versión no tiene paquete completo publicado.")
+    trabajo = os.path.join(base, "_actualizacion")
+    shutil.rmtree(trabajo, ignore_errors=True)
+    os.makedirs(trabajo, exist_ok=True)
+    destino = os.path.join(trabajo, PAQUETE)
+    with requests.get(novedad["url_paquete"], stream=True, timeout=60) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("Content-Length") or novedad.get("tam_paquete") or 0)
+        hecho = 0
+        with open(destino, "wb") as f:
+            for trozo in r.iter_content(1 << 20):
+                f.write(trozo)
+                hecho += len(trozo)
+                progreso(hecho, total)
+    _comprobar(destino, novedad.get("sha256_paquete"))
+    nueva = os.path.join(trabajo, "nueva")
+    with zipfile.ZipFile(destino) as z:
+        for n in z.namelist():                       # nada fuera de la carpeta de trabajo
+            if n.startswith(("/", "\\")) or ".." in n.replace("\\", "/").split("/"):
+                raise RuntimeError("El paquete tiene rutas no válidas.")
+        z.extractall(nueva)
+    os.remove(destino)
+    for raiz, dirs, archivos in os.walk(nueva):
+        if "Traductor de Pantalla.exe" in archivos:
+            return raiz
+    raise RuntimeError("El paquete no contiene el programa.")
+
+
+_GUION = r"""
+$ErrorActionPreference = 'Stop'
+$base = '{base}'
+$nueva = '{nueva}'
+$exe = Join-Path $base 'Traductor de Pantalla.exe'
+$datos = @({datos})
+try {{ Wait-Process -Id {pid} -Timeout 90 }} catch {{}}
+Start-Sleep -Milliseconds 700
+$anterior = Join-Path $base '_anterior'
+if (Test-Path -LiteralPath $anterior) {{ Remove-Item -LiteralPath $anterior -Recurse -Force }}
+New-Item -ItemType Directory -Path $anterior | Out-Null
+try {{
+  Get-ChildItem -LiteralPath $base -Force | Where-Object {{ $datos -notcontains $_.Name }} |
+    ForEach-Object {{ Move-Item -LiteralPath $_.FullName -Destination $anterior }}
+  Get-ChildItem -LiteralPath $nueva -Force | Where-Object {{ $datos -notcontains $_.Name }} |
+    ForEach-Object {{ Move-Item -LiteralPath $_.FullName -Destination $base }}
+  if (-not (Test-Path -LiteralPath $exe)) {{ throw 'falta el programa nuevo' }}
+}} catch {{
+  Get-ChildItem -LiteralPath $base -Force | Where-Object {{ $datos -notcontains $_.Name }} |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -LiteralPath $anterior -Force |
+    ForEach-Object {{ Move-Item -LiteralPath $_.FullName -Destination $base }}
+}}
+Remove-Item -LiteralPath (Join-Path $base '_actualizacion') -Recurse -Force -ErrorAction SilentlyContinue
+$env:TRADUCTOR_REINICIO = '1'
+Start-Process -FilePath $exe -WorkingDirectory $base
+"""
+
+
+def instalar_paquete(carpeta_nueva, base=None):
+    """Al cerrar el programa, cambia sus archivos por los nuevos (conservando tus datos) y lo
+    vuelve a abrir. Si algo falla, deja la versión anterior tal cual estaba."""
+    base = base or nucleo.BASE
+    comillas = lambda t: t.replace("'", "''")
+    guion = _GUION.format(base=comillas(base), nueva=comillas(carpeta_nueva), pid=os.getpid(),
+                          datos=", ".join("'" + d + "'" for d in DATOS))
+    ruta = os.path.join(tempfile.gettempdir(), "traductor_instalar.ps1")
+    with open(ruta, "w", encoding="utf-8-sig") as f:
+        f.write(guion)
+    subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                      "-File", ruta], creationflags=0x08000000 | 0x00000008, close_fds=True)   # sin ventana, aparte
+    os._exit(0)
+
+
+def limpiar_anterior(base=None):
+    """Tras abrir bien la versión nueva, borra la copia de seguridad de la anterior."""
+    shutil.rmtree(os.path.join(base or nucleo.BASE, "_anterior"), ignore_errors=True)
 
 
 def reiniciar():

@@ -20,11 +20,10 @@ class Bandeja:
         menu = pystray.Menu(
             M("Mostrar el traductor", lambda i, it: cola.put(("mostrar", None)), default=True),
             pystray.Menu.SEPARATOR,
-            M("Anclar a un juego o programa", atajo("anclar")),
-            M("Elegir zona en vivo", atajo("zona")),
+            M("Traducir un juego o programa", atajo("anclar")),
             M("Subtítulos de pantalla", atajo("subtitulos")),
             M("Subtítulos de voz", atajo("voz")),
-            M("Volver a la última zona", atajo("repetir")),
+            M("Traducir lo copiado", atajo("portapapeles")),
             M("Detener", atajo("detener")),
             pystray.Menu.SEPARATOR,
             M("Historial", abrir("historial")),

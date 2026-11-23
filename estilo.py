@@ -740,6 +740,53 @@ def elegir_fuente(est, texto_fila, catalogo, es_jp=False, limite=None):
     return (c[0], c[1], c[2], tam, p, c[3])
 
 
+def elegir_fuente_varias(muestras, catalogo, es_jp=False):
+    """Una sola decisión para varias líneas con el mismo aspecto: la fuente que mejor encaja
+    con TODAS (suma de parecidos). Así un renglón mal leído no decide por los demás.
+    muestras: [(objetivo, texto)]. Devuelve (ruta, instancia, nombre, parecido medio, origen)."""
+    if not muestras:
+        return None
+    candidatas = catalogo.japonesas if es_jp else catalogo.latinas
+
+    def puntuar(ruta, inst):
+        total, sizes = 0.0, []
+        for obj, txt in muestras:
+            try:
+                r = _puntuar(obj, ruta, inst, txt)
+            except Exception:
+                r = None
+            if r is None:
+                return None
+            total += r[0]
+            sizes.append(r[1])
+        return total / len(muestras), sizes
+
+    vistos, fase1 = set(), []
+    for c in candidatas:
+        if c[0] in vistos:
+            continue
+        vistos.add(c[0])
+        r = puntuar(c[0], c[1])
+        if r:
+            fase1.append((r[0] + (0.04 if c[3] == "juego" else 0), r[1], c))
+    if not fase1:
+        return None
+    fase1.sort(key=lambda x: -x[0])
+    mejor = (fase1[0][0], fase1[0][1], fase1[0][2])
+    for _, _, c in fase1[:3]:                       # grosores de las tres mejores familias
+        try:
+            nombres = [n.decode() if isinstance(n, bytes) else n
+                       for n in ImageFont.truetype(c[0], 20).get_variation_names()]
+        except Exception:
+            nombres = []
+        for inst in nombres:
+            r = puntuar(c[0], inst)
+            if r and r[0] > mejor[0]:
+                mejor = (r[0], r[1], (c[0], inst, f"{c[2].split(' ')[0]} {inst}", c[3]))
+    p, tams, c = mejor
+    return c[0], c[1], c[2], p, c[3], tams
+
+
 def _objetivo(est):
     """Tinta de la primera fila (0..1), recortada, para comparar con las fuentes."""
     if est.get("basico") or est.get("tinta_suave") is None:
