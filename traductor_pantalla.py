@@ -1772,19 +1772,32 @@ def autoprueba_furigana(m, lineas):
         bombear(0.6)
         hw = envivo.hwnd_de(juego)
         rect = envivo.rect_cliente(hw)
+        _activar_con_clic(hw, rect, bombear)          # como una persona: un clic la pone delante
         app.iniciar_vivo(rect, None, ventana=hw)
         listo = bombear(40, lambda: app.vivo is not None and app.vivo.natural is not None
                         and len(app.vivo.natural.piezas) >= 1
                         and all(p.alfa >= 255 for p in app.vivo.natural.piezas.values()))
-        if listo:
+        if not listo and app.vivo is not None:
+            v = app.vivo
+            import ctypes
+            lineas.append(f"  diagnóstico: delante={ctypes.windll.user32.GetForegroundWindow() == hw} "
+                          f"oculta={v.oculta} lecturas={v.lecturas} método={v._metodo} "
+                          f"líneas={[(l.texto, l.trad) for l in v.seguidor.lineas]} "
+                          f"piezas={len(v.natural.piezas) if v.natural else None} "
+                          f"estado={app.lbl_estado.cget('text')!r}")
+        try:                                          # la captura se guarda siempre (también si falla)
             import mss
-            app.vivo.natural.permitir_captura(True)
+            if app.vivo is not None and app.vivo.natural is not None:
+                app.vivo.natural.permitir_captura(True)
             bombear(0.4)
             with mss.mss() as sct:
                 sh = sct.grab(rect)
-            app.vivo.natural.permitir_captura(False)
+            if app.vivo is not None and app.vivo.natural is not None:
+                app.vivo.natural.permitir_captura(False)
             Image.frombytes("RGB", sh.size, sh.bgra, "raw", "BGRX").save(
                 os.path.join(nucleo.BASE, "capturas_prueba", "8_furigana.png"))
+        except Exception as e:
+            lineas.append(f"  captura de la furigana: no se pudo ({e})")
         lineas.append(f"Furigana en el estilo natural: {'OK' if listo else 'FALLO'} · "
                       f"{[b['traduccion'] for b in app.vivo.bloques] if app.vivo else None}")
         ok = ok and listo
@@ -1799,6 +1812,21 @@ def autoprueba_furigana(m, lineas):
         lineas.append("Furigana en el estilo natural: FALLO\n" + traceback.format_exc())
         ok = False
     return ok
+
+
+def _activar_con_clic(hw, rect, bombear):
+    """Pone delante la ventana de un juego de prueba con un clic en su esquina (Windows no
+    siempre deja que un programa se ponga delante solo)."""
+    import ctypes
+    u32 = ctypes.windll.user32
+    for _ in range(3):
+        if u32.GetForegroundWindow() == hw:
+            return True
+        u32.SetCursorPos(rect["left"] + 12, rect["top"] + 12)
+        u32.mouse_event(0x0002, 0, 0, 0, 0)
+        u32.mouse_event(0x0004, 0, 0, 0, 0)
+        bombear(0.4)
+    return u32.GetForegroundWindow() == hw
 
 
 def autoprueba_robustez(m, lineas):
