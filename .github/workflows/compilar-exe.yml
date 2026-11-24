@@ -33,7 +33,7 @@ jobs:
 
       - name: Instalar lector japonés de Windows y fuentes japonesas (para las pruebas)
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 14
         shell: pwsh
         run: |
           Add-WindowsCapability -Online -Name "Language.OCR~~~ja-JP~0.0.1.0" | Out-Null
@@ -169,7 +169,11 @@ jobs:
           # nada de las pruebas dentro del paquete
           Remove-Item -Recurse -Force "$d\capturas_prueba", "$d\fuentes_usuario" -ErrorAction SilentlyContinue
           Remove-Item "$d\memoria.sqlite*", "$d\perfiles.json", "$d\config.json", "$d\historial.json", "$d\registro.txt" -ErrorAction SilentlyContinue
+          # los modelos (diccionarios sin internet y voz) no van en el paquete: el programa los
+          # descarga solo la primera vez y las versiones completas los conservan
+          Remove-Item -Recurse -Force "$d\modelos" -ErrorAction SilentlyContinue
           7z a -tzip -mx=5 TraductorPantalla-Windows.zip "dist\Traductor de Pantalla"
+          Write-Host ("Paquete: {0:N0} MB" -f ((Get-Item TraductorPantalla-Windows.zip).Length / 1MB))
 
       - name: Guardar como artefacto
         uses: actions/upload-artifact@v4

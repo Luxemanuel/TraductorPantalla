@@ -105,6 +105,7 @@ class App:
         if self.cfg.get("bandeja", True) and motor is None:
             self.root.after(800, self._poner_bandeja)
         self.paquete_listo = None          # versión completa descargada, se instala al cerrar
+        self._lock_diccionarios = threading.Lock()
         if motor is None:                  # tras instalar una versión completa: borrar la copia vieja
             self.root.after(120000, lambda: threading.Thread(target=self._limpiar_anterior, daemon=True).start())
         if motor is not None:          # motor ya cargado (autoprueba)
@@ -381,6 +382,8 @@ class App:
             self.bandeja.avisar(texto)
 
     def estado(self, texto, error=False):
+        if texto.startswith("● "):              # el punto de estado ya lo indica
+            texto = texto[2:]
         self._estado_error = error
         self.lbl_estado.configure(text=texto, foreground=tema.ERROR if error else tema.HUESO)
 
@@ -440,6 +443,7 @@ class App:
                     self._mostrar_novedad(*dato)
                 elif tipo == "listo":
                     self.root.after(4000, lambda: self.buscar_actualizacion(False))
+                    self.root.after(9000, lambda: self._preparar_sin_internet(self.cfg["idioma_destino"]))
                     self.listo = True
                     self.estado(f"Listo ({dato:.0f} s). {self._info_lector()}  F1 = ayuda")
                 elif tipo == "error":
@@ -958,18 +962,33 @@ class App:
         self._cambiar("idioma_destino", codigo)
         self._sincronizar_origen()
         self.estado(f"Ahora se traduce a {self.cb_destino.get()}.")
-        if self.listo and self.motor.traductor is not None:
-            argos = self.motor.traductor.argos
+        if self.listo:
+            self._preparar_sin_internet(codigo)
 
-            def preparar():   # diccionario sin internet para ese idioma (respaldo)
+    def _preparar_sin_internet(self, codigo):
+        """Diccionarios sin internet (el respaldo) para traducir a 'codigo': si faltan, se
+        descargan solos en segundo plano. Así el paquete no los lleva y pesa mucho menos."""
+        if self.motor.traductor is None:
+            return
+        argos = self.motor.traductor.argos
+        if argos.disponible("en", codigo) and argos.disponible("ja", codigo):
+            return
+        import traduccion
+        nombre = traduccion.IDIOMAS_DESTINO.get(codigo, codigo)
+
+        def preparar():
+            with self._lock_diccionarios:          # uno a la vez (no descargar dos veces lo mismo)
                 try:
-                    if not argos.disponible("en", codigo) or not argos.disponible("ja", codigo):
-                        for origen in ("en", "ja"):
-                            argos.descargar(origen, codigo, lambda m: self.cola.put(("estado", m)))
-                        self.cola.put(("estado", f"Listo también sin internet: {self.cb_destino.get()}."))
+                    if argos.disponible("en", codigo) and argos.disponible("ja", codigo):
+                        return
+                    self.cola.put(("estado", f"Descargando el diccionario sin internet ({nombre}). "
+                                             f"Solo la primera vez; puedes usar el traductor mientras."))
+                    for origen in ("en", "ja"):
+                        argos.descargar(origen, codigo, lambda m: None)
+                    self.cola.put(("estado", f"Listo también sin internet: {nombre}."))
                 except Exception:
                     log.exception("Descargando diccionario sin internet")
-            threading.Thread(target=preparar, daemon=True).start()
+        threading.Thread(target=preparar, daemon=True, name="diccionarios").start()
 
     def _mostrar_motor(self):
         t = self.motor.traductor
@@ -1621,6 +1640,8 @@ def autoprueba_instalador(lineas):
         open(os.path.join(base, "app", "version.py"), "w").write("VERSION = 'vieja'")
         for d in ("config.json", "memoria.sqlite", "perfiles.json"):
             open(os.path.join(base, d), "w").write("mis datos")
+        os.makedirs(os.path.join(base, "modelos", "argos"))      # ya descargados: el paquete no los trae
+        open(os.path.join(base, "modelos", "argos", "modelo.bin"), "w").write("mis datos")
         if caso == "bueno":
             shutil.copyfile(exe, os.path.join(nueva, "Traductor de Pantalla.exe"))
         open(os.path.join(nueva, "app", "version.py"), "w").write("VERSION = 'nueva'")
@@ -1629,8 +1650,9 @@ def autoprueba_instalador(lineas):
         subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", guion],
                        timeout=120, capture_output=True)
         version_ahora = open(os.path.join(base, "app", "version.py")).read()
-        datos_ok = all(open(os.path.join(base, d)).read() == "mis datos"
-                       for d in ("config.json", "memoria.sqlite", "perfiles.json"))
+        datos_ok = all(os.path.isfile(os.path.join(base, d)) and open(os.path.join(base, d)).read() == "mis datos"
+                       for d in ("config.json", "memoria.sqlite", "perfiles.json",
+                                 os.path.join("modelos", "argos", "modelo.bin")))
         exe_ok = os.path.isfile(os.path.join(base, "Traductor de Pantalla.exe"))
         esperado = "nueva" if caso == "bueno" else "vieja"
         ok = esperado in version_ahora and datos_ok and exe_ok

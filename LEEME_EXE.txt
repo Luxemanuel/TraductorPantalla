@@ -3,7 +3,10 @@ TRADUCTOR DE PANTALLA  ·  Inglés / Japonés -> tu idioma   (versión .exe)
 
 CÓMO ABRIRLO
   Doble clic en "Traductor de Pantalla.exe".
-  No necesita Python ni internet: los modelos van en la carpeta "modelos".
+  No necesita Python. La primera vez, con internet, descarga solo y en segundo
+  plano el diccionario sin internet (el respaldo para cuando no hay conexión);
+  el modelo de voz se descarga la primera vez que usas los subtítulos de voz.
+  Todo queda en la carpeta "modelos" y las actualizaciones lo conservan.
   No separes el .exe de su carpeta (necesita los archivos que lo acompañan).
   Para tenerlo a mano: clic derecho en el .exe > Enviar a > Escritorio
   (crear acceso directo).
