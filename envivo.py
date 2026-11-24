@@ -869,7 +869,11 @@ class SesionEnVivo:
                 peq = miniatura(img)
                 # Si la imagen no cambió nada, no hace falta leer. Si cambió (aunque sea un
                 # fondo animado), se lee el TEXTO: lo que ya estaba traducido se conserva.
-                if self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5 or ocupada:
+                # Aunque no cambie, se vuelve a mirar de vez en cuando: si una lectura salió mal
+                # (algo tapó el juego un instante), se arregla sola.
+                quieta = time.time() - self.ultimo_lanzamiento
+                if (self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5 or ocupada
+                        or quieta > (2.5 if not self.bloques else 6.0)):
                     self._lanzar(img, peq)
         except Exception:
             log_limitado("tick", "Bucle en vivo")

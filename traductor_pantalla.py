@@ -1543,7 +1543,7 @@ def autoprueba_anclado(m, lineas):
     original = m.traducir_lote
     m.traducir_lote = lambda items, destino=None: (llamadas.append([t for t, _ in items]),
                                                    original(items, destino))[1]
-    app = App(motor=m)
+    app = _app_de_prueba(m)
     app.cfg["modo_vista"] = "superpuesto"
     r = app.root
 
@@ -1748,7 +1748,7 @@ def autoprueba_furigana(m, lineas):
         ok = False
     # verla de verdad en el estilo natural
     try:
-        app = App(motor=m)
+        app = _app_de_prueba(m)
         r = app.root
         r.withdraw()
 
@@ -1814,6 +1814,31 @@ def autoprueba_furigana(m, lineas):
     return ok
 
 
+_APPS_PRUEBA = []
+
+
+def _app_de_prueba(m):
+    """Una ventana del programa nueva para una prueba. Las de pruebas anteriores dejan de vigilar
+    perfiles y atajos: en el uso real solo hay una, y aquí se estorbarían (una vieja podía
+    empezar sola sobre el juego de la prueba siguiente porque todos son el mismo .exe)."""
+    for vieja in _APPS_PRUEBA:
+        vieja.listo = False
+        vieja.cfg["perfiles_auto"] = False
+        if vieja._hk is not None:
+            try:
+                vieja._hk.detener()
+            except Exception:
+                pass
+            vieja._hk = None
+        try:
+            vieja.root.withdraw()
+        except tk.TclError:
+            pass
+    app = App(motor=m)
+    _APPS_PRUEBA.append(app)
+    return app
+
+
 def _activar_con_clic(hw, rect, bombear):
     """Pone delante la ventana de un juego de prueba con un clic en su esquina (Windows no
     siempre deja que un programa se ponga delante solo)."""
@@ -1866,7 +1891,7 @@ def autoprueba_robustez(m, lineas):
     ok_c = ok_c and c3 is not None
     if c3 is not None:
         c3.close()
-    app = App(motor=m)
+    app = _app_de_prueba(m)
     r = app.root
 
     def bombear(segundos, hasta=lambda: False):
@@ -1965,7 +1990,7 @@ def autoprueba_natural(m, lineas):
     lineas.append("--- Prueba ESTILO NATURAL ---")
     carpeta = os.path.join(nucleo.BASE, "capturas_prueba")
     os.makedirs(carpeta, exist_ok=True)
-    app = App(motor=m)
+    app = _app_de_prueba(m)
     app.cfg["modo_vista"] = "superpuesto"
     r = app.root
     r.withdraw()                  # que no tape el juego de prueba (pantalla de 1024 px)
@@ -2180,7 +2205,7 @@ def autoprueba_vivo(m, lineas):
     un clic que debe atravesar la capa y un cambio de texto que debe re-traducirse."""
     import mss
     lineas.append("--- Prueba EN VIVO ---")
-    app = App(motor=m)
+    app = _app_de_prueba(m)
     app.cfg["modo_vista"] = "superpuesto"
     r = app.root
 
