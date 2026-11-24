@@ -103,7 +103,12 @@ jobs:
           $d = "dist\Traductor de Pantalla"
           $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -ArgumentList "--autoprueba" -Wait -PassThru
           Get-Content "$d\autoprueba.txt" -Encoding UTF8
-          if (Test-Path "$d\registro.txt") { Get-Content "$d\registro.txt" -Tail 40 -Encoding UTF8 }
+          if (Test-Path "$d\registro.txt") {
+            Write-Host "--- errores del registro ---"
+            Select-String -Path "$d\registro.txt" -Pattern " ERROR | WARNING Error|Traceback" -Context 0,14 -Encoding UTF8 | Select-Object -First 12 | ForEach-Object { $_.ToString() }
+            Write-Host "--- final del registro ---"
+            Get-Content "$d\registro.txt" -Tail 40 -Encoding UTF8
+          }
           if ($p.ExitCode -ne 0) { Write-Error "La autoprueba falló"; exit 1 }
           Remove-Item "$d\autoprueba.txt", "$d\registro.txt", "$d\voz_prueba.wav", "$d\historial.json" -ErrorAction SilentlyContinue
 

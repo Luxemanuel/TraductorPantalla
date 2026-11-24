@@ -1763,6 +1763,7 @@ def autoprueba_furigana(m, lineas):
         juego = tk.Toplevel(r)
         juego.title("Novela japonesa de prueba")
         juego.geometry(f"{escena.width}x{escena.height}+120+140")
+        juego.attributes("-topmost", True)            # que ninguna otra ventana de las pruebas lo tape
         foto = ImageTk.PhotoImage(escena, master=juego)
         tk.Label(juego, image=foto, bd=0, highlightthickness=0).pack()
         juego.foto = foto
@@ -1785,6 +1786,8 @@ def autoprueba_furigana(m, lineas):
                           f"líneas={[(l.texto, l.trad) for l in v.seguidor.lineas]} "
                           f"piezas={len(v.natural.piezas) if v.natural else None} "
                           f"estado={app.lbl_estado.cget('text')!r}")
+            for d in _ventanas_encima(rect):
+                lineas.append(f"  ventana encima del juego: {d}")
         try:                                          # la captura se guarda siempre (también si falla)
             import mss
             if app.vivo is not None and app.vivo.natural is not None:
@@ -1814,6 +1817,41 @@ def autoprueba_furigana(m, lineas):
     return ok
 
 
+def _ventanas_encima(rect):
+    """Diagnóstico: ventanas visibles de este programa que tapan 'rect' (y de qué prueba son)."""
+    import ctypes
+    import ctypes.wintypes as wt
+    u32 = ctypes.windll.user32
+    pid = os.getpid()
+    raices = {}
+    for i, a in enumerate(_APPS_PRUEBA):
+        try:
+            raices[int(a.root.wm_frame(), 16)] = f"principal de la prueba nº{i + 1} (estado {a.root.state()})"
+        except Exception:
+            pass
+    vistas = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def cada(hw, _):
+        p = wt.DWORD()
+        u32.GetWindowThreadProcessId(hw, ctypes.byref(p))
+        if p.value == pid and u32.IsWindowVisible(hw):
+            rc = wt.RECT()
+            u32.GetWindowRect(hw, ctypes.byref(rc))
+            if (rc.left < rect["left"] + rect["width"] and rc.right > rect["left"]
+                    and rc.top < rect["top"] + rect["height"] and rc.bottom > rect["top"]):
+                t = ctypes.create_unicode_buffer(256)
+                c = ctypes.create_unicode_buffer(256)
+                u32.GetWindowTextW(hw, t, 256)
+                u32.GetClassNameW(hw, c, 256)
+                ex = u32.GetWindowLongW(hw, -20)
+                vistas.append(f"{t.value!r} clase {c.value} {(rc.left, rc.top, rc.right, rc.bottom)} "
+                              f"{'encima-siempre ' if ex & 0x8 else ''}{raices.get(hw, '')}")
+        return True
+    u32.EnumWindows(cada, 0)
+    return vistas
+
+
 _APPS_PRUEBA = []
 
 
@@ -1832,6 +1870,10 @@ def _app_de_prueba(m):
             vieja._hk = None
         try:
             vieja.root.withdraw()
+        except tk.TclError:
+            pass
+        try:
+            vieja.root.attributes("-topmost", False)
         except tk.TclError:
             pass
     app = App(motor=m)
