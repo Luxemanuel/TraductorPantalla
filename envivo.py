@@ -17,7 +17,7 @@ import tkinter.font as tkfont
 from PIL import Image, ImageChops, ImageStat
 
 import nucleo
-from nucleo import ESQUEMAS, FUENTES, Cancelado, log
+from nucleo import ESQUEMAS, FUENTES, Cancelado, log, log_limitado
 
 ES_WINDOWS = sys.platform.startswith("win")
 CLAVE = "#010203"          # color que Windows vuelve 100 % transparente
@@ -678,6 +678,9 @@ class SesionEnVivo:
         self.oculta = False
         self._capturar_ext = capturar          # para pruebas
         self._sct = None if capturar else mss.mss()
+        self._metodo = "pantalla"              # "ventana": se lee la ventana del juego (PrintWindow)
+        self._negras = 0                       # capturas seguidas que salieron negras
+        self.aviso_negro = False
         self.capa = CapaEnVivo(app, self.mon, caja)
         self.aplicar_modo()
         threading.Thread(target=self._traductor, daemon=True).start()
@@ -719,7 +722,7 @@ class SesionEnVivo:
             try:
                 trads = self.app.motor.traducir_lote([(t, i) for _, t, i in lote])
             except Exception:
-                log.exception("Traduciendo en segundo plano")
+                log_limitado("traducir", "Traduciendo en segundo plano")
                 trads = [None] * len(lote)
             self.app.motor.tiempos = (self.app.motor.tiempos[0], time.perf_counter() - t0)
             with self.cerrojo:
@@ -763,6 +766,11 @@ class SesionEnVivo:
         if self._capturar_ext:
             return self._capturar_ext()
         reg = self.region()
+        if self._metodo == "ventana" and self.ventana:
+            img = self._capturar_ventana(reg)
+            if img is not None:
+                return img
+            self._metodo = "pantalla"
         if not self.capa.excluida:            # Windows antiguo: esconder la capa un instante
             self.capa.esconder_un_momento()
             if self.natural is not None and self.natural.visible_:
@@ -778,7 +786,36 @@ class SesionEnVivo:
                     self.natural.visible(True)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         tam = (reg["width"], reg["height"])
-        return img if img.size == tam else img.resize(tam, Image.LANCZOS)
+        img = img if img.size == tam else img.resize(tam, Image.LANCZOS)
+        return self._revisar_negra(img, reg)
+
+    def _capturar_ventana(self, reg):
+        try:
+            img = capturar_hwnd(self.ventana, reg)
+        except Exception:
+            log_limitado("printwindow", "Leyendo la ventana del juego")
+            return None
+        return None if img is None or es_negra(img) else img
+
+    def _revisar_negra(self, img, reg):
+        """Algunos juegos (pantalla completa exclusiva, DirectX) salen negros en una captura
+        normal. Entonces se lee la ventana del juego directamente; si tampoco se puede, se avisa."""
+        if not self.ventana or not es_negra(img):
+            self._negras = 0
+            self.aviso_negro = False
+            return img
+        self._negras += 1
+        if self._negras in (3, 30):
+            alt = self._capturar_ventana(reg)
+            if alt is not None:
+                log.info("La captura sale negra: se lee la ventana del juego directamente")
+                self._metodo = "ventana"
+                self._negras = 0
+                return alt
+        if self._negras >= 45 and not self.aviso_negro:          # ~6 s seguidos sin imagen
+            self.aviso_negro = True
+            self.app.cola.put(("aviso_juego", self))
+        return img
 
     # ---------- programa anclado ----------
     def _seguir_ventana(self):
@@ -835,7 +872,7 @@ class SesionEnVivo:
                 if self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5 or ocupada:
                     self._lanzar(img, peq)
         except Exception:
-            log.exception("Bucle en vivo")
+            log_limitado("tick", "Bucle en vivo")
         if self.activa:
             self.app.root.after(60 if self.ocupada() else self.intervalo, self._tick)
 
@@ -873,13 +910,13 @@ class SesionEnVivo:
                     try:
                         piezas = pintor.componer(img, traducidas, [p["caja"] for p in pars])
                     except Exception:
-                        log.exception("Componiendo la traducción natural")
+                        log_limitado("componer", "Componiendo la traducción natural")
                         piezas = None
                 self.app.cola.put(("vivo", (self, vis, nuevos, time.perf_counter() - t0, piezas)))
             except Cancelado:
                 self.procesando = False
             except Exception as e:
-                log.exception("Lectura en vivo")
+                log_limitado("lectura", "Lectura en vivo")
                 self.app.cola.put(("vivo_error", (self, str(e))))
         threading.Thread(target=tarea, daemon=True).start()
 
@@ -921,6 +958,76 @@ class SesionEnVivo:
                 self._sct.close()
             except Exception:
                 pass
+
+
+def es_negra(img):
+    """¿La imagen es (casi) toda negra? (la captura no vio el juego)"""
+    peq = img.convert("L").resize((64, 36), Image.BILINEAR)
+    return peq.getextrema()[1] < 14
+
+
+def capturar_hwnd(hwnd, region):
+    """Lee el contenido de la ventana 'hwnd' con PrintWindow (aunque tenga otras encima o el
+    juego dibuje con DirectX) y recorta 'region' (coordenadas de pantalla). None si falla."""
+    if not ES_WINDOWS or not hwnd:
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+    u32, g32 = ctypes.windll.user32, ctypes.windll.gdi32
+    vp = ctypes.c_void_p
+    u32.GetWindowDC.restype = vp
+    u32.GetWindowDC.argtypes = [vp]
+    u32.ReleaseDC.argtypes = [vp, vp]
+    u32.PrintWindow.argtypes = [vp, vp, ctypes.c_uint]
+    u32.GetWindowRect.argtypes = [vp, ctypes.POINTER(wt.RECT)]
+    g32.CreateCompatibleDC.restype = vp
+    g32.CreateCompatibleDC.argtypes = [vp]
+    g32.CreateCompatibleBitmap.restype = vp
+    g32.CreateCompatibleBitmap.argtypes = [vp, ctypes.c_int, ctypes.c_int]
+    g32.SelectObject.restype = vp
+    g32.SelectObject.argtypes = [vp, vp]
+    g32.DeleteObject.argtypes = [vp]
+    g32.DeleteDC.argtypes = [vp]
+    g32.GetDIBits.argtypes = [vp, vp, ctypes.c_uint, ctypes.c_uint, vp, vp, ctypes.c_uint]
+    rc = wt.RECT()
+    if not u32.GetWindowRect(vp(hwnd), ctypes.byref(rc)):
+        return None
+    w, h = rc.right - rc.left, rc.bottom - rc.top
+    if w <= 0 or h <= 0 or w * h > 80_000_000:
+        return None
+    hdc = u32.GetWindowDC(vp(hwnd))
+    if not hdc:
+        return None
+    mdc = g32.CreateCompatibleDC(hdc)
+    bmp = g32.CreateCompatibleBitmap(hdc, w, h)
+    viejo = g32.SelectObject(mdc, bmp)
+    try:
+        if not u32.PrintWindow(vp(hwnd), mdc, 2):                # PW_RENDERFULLCONTENT
+            return None
+        bi = _BIH()
+        bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(_BIH), w, -h, 1, 32
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not g32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0):
+            return None
+    finally:
+        g32.SelectObject(mdc, viejo)
+        g32.DeleteObject(bmp)
+        g32.DeleteDC(mdc)
+        u32.ReleaseDC(vp(hwnd), hdc)
+    img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+    x0, y0 = region["left"] - rc.left, region["top"] - rc.top
+    return img.crop((x0, y0, x0 + region["width"], y0 + region["height"]))
+
+
+if ES_WINDOWS:
+    import ctypes as _ct
+    import ctypes.wintypes as _wt
+
+    class _BIH(_ct.Structure):
+        _fields_ = [("biSize", _wt.DWORD), ("biWidth", _wt.LONG), ("biHeight", _wt.LONG),
+                    ("biPlanes", _wt.WORD), ("biBitCount", _wt.WORD), ("biCompression", _wt.DWORD),
+                    ("biSizeImage", _wt.DWORD), ("biXPelsPerMeter", _wt.LONG),
+                    ("biYPelsPerMeter", _wt.LONG), ("biClrUsed", _wt.DWORD), ("biClrImportant", _wt.DWORD)]
 
 
 def capturar_ventana(win, region):

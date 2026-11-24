@@ -52,6 +52,7 @@ def aplicar(root, tam=10):
     st.configure("TFrame", background=OBSIDIANA)
     st.configure("Tarjeta.TFrame", background=SUPERFICIE)
     st.configure("Linea.TFrame", background=VINO)
+    st.configure("Linea2.TFrame", background=BORDE)
     st.configure("TLabel", background=OBSIDIANA, foreground=HUESO)
     st.configure("Tarjeta.TLabel", background=SUPERFICIE)
     st.configure("Tenue.TLabel", foreground=TENUE)
@@ -123,6 +124,19 @@ def aplicar(root, tam=10):
 
     st.configure("TProgressbar", background=VINO_CLARO, troughcolor=SUPERFICIE, bordercolor=OBSIDIANA,
                  lightcolor=VINO_CLARO, darkcolor=VINO, thickness=4)
+    # barra que solo se ve mientras se trabaja (quieta = del color del fondo, sin saltos de tamaño)
+    st.configure("Fina.Horizontal.TProgressbar", background=VINO_CLARO, troughcolor=SUPERFICIE,
+                 bordercolor=OBSIDIANA, lightcolor=VINO_CLARO, darkcolor=VINO, thickness=3)
+    st.configure("Quieta.Horizontal.TProgressbar", background=OBSIDIANA, troughcolor=OBSIDIANA,
+                 bordercolor=OBSIDIANA, lightcolor=OBSIDIANA, darkcolor=OBSIDIANA, thickness=3)
+    # enlaces del pie (botones planos)
+    st.configure("Enlace.TButton", background=OBSIDIANA, foreground=TENUE, bordercolor=OBSIDIANA,
+                 lightcolor=OBSIDIANA, darkcolor=OBSIDIANA, padding=(6, 3), focusthickness=1)
+    st.map("Enlace.TButton", foreground=[("disabled", APAGADO), ("active", HUESO)],
+           background=[("pressed", VINO_OSCURO), ("active", SUPERFICIE)],
+           bordercolor=[("focus", VINO_CLARO), ("active", SUPERFICIE)],
+           lightcolor=[("active", SUPERFICIE)], darkcolor=[("active", SUPERFICIE)])
+    st.configure("Lema.TLabel", foreground=PLATA)
     st.configure("TScale", background=VINO_CLARO, troughcolor=SUPERFICIE, bordercolor=BORDE,
                  lightcolor=VINO_CLARO, darkcolor=VINO)
     st.map("TScale", background=[("active", VINO_TEXTO)])
@@ -217,3 +231,255 @@ def barra_oscura(win):
         ctypes.windll.user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0020 | 0x0002 | 0x0001 | 0x0004 | 0x0010)
     except Exception:
         pass
+
+
+# ============================================================================
+# Botón dibujado: esquinas suaves, icono, título y atajo en una etiqueta
+# ============================================================================
+_COLORES_BOTON = {
+    # variante: {estado: (arriba, abajo, borde, grosor_borde, texto, icono)}
+    "principal": {
+        "normal": ((142, 28, 58), (104, 16, 41), (255, 255, 255, 34), 1, HUESO, HUESO),
+        "hover": ((168, 38, 68), (122, 21, 48), (255, 255, 255, 60), 1, HUESO, HUESO),
+        "pressed": ((82, 14, 30), (70, 10, 26), (255, 255, 255, 30), 1, HUESO, HUESO),
+        "disabled": ((44, 22, 28), (40, 20, 26), (255, 255, 255, 10), 1, APAGADO, APAGADO),
+    },
+    "tarjeta": {
+        "normal": ((27, 22, 30), (22, 18, 25), (48, 40, 58, 255), 1, HUESO, PLATA),
+        "hover": ((38, 30, 42), (31, 25, 35), (122, 21, 48, 255), 1, HUESO, VINO_TEXTO),
+        "pressed": ((82, 14, 30), (70, 10, 26), (163, 35, 63, 255), 1, HUESO, HUESO),
+        "disabled": ((19, 16, 21), (17, 14, 19), (32, 27, 37, 255), 1, APAGADO, APAGADO),
+    },
+    "peligro": {
+        "normal": ((48, 16, 26), (38, 12, 20), (163, 35, 63, 255), 1, HUESO, VINO_TEXTO),
+        "hover": ((72, 18, 34), (58, 14, 28), (224, 86, 111, 255), 1, HUESO, VINO_TEXTO),
+        "pressed": ((82, 14, 30), (70, 10, 26), (163, 35, 63, 255), 1, HUESO, HUESO),
+        "disabled": ((19, 16, 21), (17, 14, 19), (32, 27, 37, 255), 1, APAGADO, APAGADO),
+    },
+}
+
+
+class Boton(tk.Canvas):
+    """Botón de la ventana principal. Funciona con ratón y teclado (Tab, Enter, Espacio) y
+    entiende state(["disabled"]) / state(["!disabled"]) como los botones ttk."""
+
+    def __init__(self, master, comando, titulo="", atajo="", icono=None, variante="tarjeta",
+                 fuente=None, fuente_atajo=None):
+        super().__init__(master, highlightthickness=0, bd=0, bg=OBSIDIANA, takefocus=1, cursor="hand2")
+        self.comando = comando
+        self.titulo, self.atajo, self.icono = titulo, atajo, icono
+        self.variante = variante
+        self.f = fuente or tkfont.nametofont("TkDefaultFont")
+        self.f_at = fuente_atajo or self.f
+        self._estados = set()
+        self._fotos = []
+        self._ultimo = None
+        ls = self.f.metrics("linespace")
+        if variante == "principal":
+            alto = int(ls * 2.9)
+        else:
+            alto = int(ls * 2 + self.f_at.metrics("linespace") + 18)
+        self.configure(height=alto, width=10)
+        for ev, fn in (("<Configure>", lambda e: self._dibujar()), ("<Enter>", lambda e: self._poner("hover", True)),
+                       ("<Leave>", lambda e: (self._poner("hover", False), self._poner("pressed", False))),
+                       ("<ButtonPress-1>", lambda e: self._poner("pressed", True)),
+                       ("<ButtonRelease-1>", self._soltar), ("<FocusIn>", lambda e: self._poner("focus", True)),
+                       ("<FocusOut>", lambda e: self._poner("focus", False)),
+                       ("<Return>", lambda e: self.invoke()), ("<space>", lambda e: self.invoke())):
+            self.bind(ev, fn)
+
+    # ---- como un botón ttk ----
+    def state(self, lista=None):
+        if lista is None:
+            return tuple(self._estados)
+        for s in lista:
+            if s.startswith("!"):
+                self._estados.discard(s[1:])
+            else:
+                self._estados.add(s)
+        self.configure(cursor="" if "disabled" in self._estados else "hand2",
+                       takefocus=0 if "disabled" in self._estados else 1)
+        self._dibujar()
+
+    def instate(self, lista):
+        return all((s[1:] not in self._estados) if s.startswith("!") else (s in self._estados) for s in lista)
+
+    def invoke(self):
+        if "disabled" not in self._estados and self.comando:
+            self.comando()
+
+    def poner_texto(self, titulo, atajo=""):
+        if (titulo, atajo) != (self.titulo, self.atajo):
+            self.titulo, self.atajo = titulo, atajo
+            self._dibujar()
+
+    def reajustar(self):
+        """Recalcula el alto con la letra actual (al cambiar el tamaño de la interfaz)."""
+        ls = self.f.metrics("linespace")
+        if self.variante == "principal":
+            alto = int(ls * 2.9)
+        else:
+            alto = int(ls * 2 + self.f_at.metrics("linespace") + 18)
+        self._ultimo = None
+        self.configure(height=alto)
+        self._dibujar()
+
+    def poner_variante(self, variante):
+        if variante != self.variante:
+            self.variante = variante
+            self._dibujar()
+
+    # ---- interno ----
+    def _poner(self, estado, si):
+        antes = estado in self._estados
+        if si and not antes:
+            self._estados.add(estado)
+        elif not si and antes:
+            self._estados.discard(estado)
+        else:
+            return
+        self._dibujar()
+
+    def _soltar(self, e):
+        dentro = 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height()
+        self._poner("pressed", False)
+        if dentro:
+            self.invoke()
+
+    def _clave_estado(self):
+        if "disabled" in self._estados:
+            return "disabled"
+        if "pressed" in self._estados:
+            return "pressed"
+        return "hover" if "hover" in self._estados else "normal"
+
+    def _dibujar(self):
+        import marca
+        from PIL import ImageTk
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 20 or h < 10:
+            return
+        est = self._clave_estado()
+        foco = "focus" in self._estados and est != "disabled"
+        firma = (w, h, est, foco, self.titulo, self.atajo, self.variante, self.icono)
+        if firma == self._ultimo:
+            return
+        self._ultimo = firma
+        arriba, abajo, borde, grosor, c_txt, c_ico = _COLORES_BOTON[self.variante][est]
+        radio = max(6, int(h * (0.2 if self.variante == "principal" else 0.16)))
+        if foco:
+            borde, grosor = _rgb(HUESO if self.variante == "principal" else VINO_CLARO) + (255,), 2
+        fondo = marca.rectangulo(w, h, radio, arriba, borde, grosor, degradado=abajo)
+        self.delete("all")
+        self._fotos = [ImageTk.PhotoImage(fondo, master=self)]
+        self.create_image(0, 0, anchor="nw", image=self._fotos[0])
+        ls = self.f.metrics("linespace")
+        pad = max(10, int(ls * 0.75))
+        x = pad
+        if self.icono:
+            lado = int(ls * (1.35 if self.variante == "principal" else 1.25))
+            ico = ImageTk.PhotoImage(marca.icono_ui(self.icono, lado, _rgb(c_ico) if isinstance(c_ico, str)
+                                                    else c_ico), master=self)
+            self._fotos.append(ico)
+            if self.variante == "principal":
+                self.create_image(x, h // 2, anchor="w", image=ico)
+            else:
+                self.create_image(x, pad + ls // 2 + 1, anchor="w", image=ico)
+            x += lado + int(ls * 0.6)
+        color_txt = c_txt if isinstance(c_txt, str) else "#%02x%02x%02x" % c_txt
+        chip_w = 0
+        if self.atajo:
+            chip_w = int(self.f_at.measure(self.atajo) + ls * 0.9)
+            chip_h = int(self.f_at.metrics("linespace") + 6)
+            if self.variante == "principal":
+                cx, cy = w - pad - chip_w, (h - chip_h) // 2
+                rel, bor, col = (0, 0, 0, 60), (255, 255, 255, 50), HUESO
+            else:
+                cx, cy = x, pad + ls + 5
+                rel, bor, col = (255, 255, 255, 10), (255, 255, 255, 26), TENUE
+            if est == "disabled":
+                col = APAGADO
+            chip = ImageTk.PhotoImage(marca.rectangulo(chip_w, chip_h, max(4, chip_h // 3), rel, bor, 1),
+                                      master=self)
+            self._fotos.append(chip)
+            self.create_image(cx, cy, anchor="nw", image=chip)
+            self.create_text(cx + chip_w // 2, cy + chip_h // 2, text=self.atajo, font=self.f_at, fill=col)
+        if self.variante == "principal":
+            self.create_text(x, h // 2, text=self.titulo, anchor="w", font=self.f, fill=color_txt,
+                             width=max(40, w - x - pad - chip_w - pad))
+        else:
+            self.create_text(x, pad + ls // 2 + 1, text=self.titulo, anchor="w", font=self.f, fill=color_txt,
+                             width=max(40, w - x - pad))
+
+
+class Punto(tk.Canvas):
+    """Indicador de estado: un punto de color que puede latir (traducción en vivo)."""
+    COLORES = {"listo": PLATA, "vivo": VINO_TEXTO, "ocupado": VINO_TEXTO, "error": ERROR,
+               "aviso": "#e0a85a", "cargando": APAGADO}
+
+    def __init__(self, master, lado=10):
+        super().__init__(master, width=lado, height=lado, highlightthickness=0, bd=0, bg=OBSIDIANA)
+        self.lado = lado
+        self.tipo = "cargando"
+        self._fase = 0
+        self._latido = None
+        self._dibujar(self.COLORES["cargando"])
+
+    def _dibujar(self, color):
+        self._color = color
+        try:
+            self.delete("all")
+            m = 1
+            self.create_oval(m, m, self.lado - m, self.lado - m, fill=color, outline="")
+        except tk.TclError:
+            pass
+
+    def redibujar(self):
+        self._dibujar(getattr(self, "_color", PLATA))
+
+    def poner(self, tipo):
+        if tipo == self.tipo:
+            return
+        self.tipo = tipo
+        if self._latido is not None:
+            self.after_cancel(self._latido)
+            self._latido = None
+        self._dibujar(self.COLORES.get(tipo, PLATA))
+        if tipo == "vivo":
+            self._latir()
+
+    def _latir(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self._fase = 1 - self._fase
+            self._dibujar(VINO_TEXTO if self._fase else VINO)
+            self._latido = self.after(700, self._latir)
+        except tk.TclError:
+            self._latido = None
+
+
+class Filete(tk.Canvas):
+    """Línea fina de color vino que se desvanece hacia los lados."""
+
+    def __init__(self, master, alto=2):
+        super().__init__(master, height=alto, highlightthickness=0, bd=0, bg=OBSIDIANA)
+        self._foto = None
+        self._ancho = 0
+        self.bind("<Configure>", lambda e: self._dibujar())
+
+    def _dibujar(self):
+        from PIL import Image, ImageTk
+        import numpy as np
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or w == self._ancho:
+            return
+        self._ancho = w
+        t = np.linspace(0, 1, w)
+        a = np.clip(np.minimum(t, 1 - t) * 3.2, 0, 1)
+        fondo, vino = np.array(_rgb(OBSIDIANA)), np.array(_rgb(VINO_CLARO))
+        fila = (fondo[None] * (1 - a[:, None]) + vino[None] * a[:, None]).astype(np.uint8)
+        img = Image.fromarray(np.repeat(fila[None], h, 0), "RGB")
+        self._foto = ImageTk.PhotoImage(img, master=self)
+        self.delete("all")
+        self.create_image(0, 0, anchor="nw", image=self._foto)

@@ -64,6 +64,7 @@ jobs:
             --hidden-import actualizar --hidden-import subtitulos_voz --hidden-import lector `
             --hidden-import traduccion --hidden-import version --hidden-import estilo `
             --hidden-import capa_natural --hidden-import tema --hidden-import bandeja `
+            --hidden-import marca --hidden-import marca_datos --hidden-import atajos `
             @extra lanzador.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
@@ -145,6 +146,21 @@ jobs:
           if (Test-Path "$d\registro.txt") { Get-Content "$d\registro.txt" -Tail 40 -Encoding UTF8 }
           Remove-Item "$d\registro.txt", "$d\config.json" -ErrorAction SilentlyContinue
           if (-not $vivo) { Write-Error "El programa se cerró solo al arrancar"; exit 1 }
+
+      - name: Tamaño del paquete (qué ocupa más)
+        if: always()
+        shell: pwsh
+        run: |
+          $d = "dist\Traductor de Pantalla"
+          if (Test-Path $d) {
+            $total = (Get-ChildItem $d -Recurse -File | Measure-Object Length -Sum).Sum
+            Write-Host ("TOTAL: {0:N0} MB" -f ($total / 1MB))
+            Get-ChildItem $d -Directory -Recurse -Depth 1 | ForEach-Object {
+              [pscustomobject]@{ MB = [math]::Round(((Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1); Carpeta = $_.FullName.Substring((Resolve-Path $d).Path.Length) }
+            } | Sort-Object MB -Descending | Select-Object -First 25 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+            Get-ChildItem $d -Recurse -File | Sort-Object Length -Descending | Select-Object -First 15 |
+              ForEach-Object { Write-Host ("{0,8:N1} MB  {1}" -f ($_.Length / 1MB), $_.FullName.Substring((Resolve-Path $d).Path.Length)) }
+          }
 
       - name: Comprimir
         shell: pwsh

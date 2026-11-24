@@ -257,10 +257,9 @@ def analizar(arr, caja, otras=(), filas_ocr=None):
         en_borde = borde[texto]
         fb = [en_borde[et_all == j].mean() if (et_all == j).any() else 0 for j in range(2)]
         # dos tonos de verdad (no solo el borde suavizado entre letra y fondo)
-        lejos = [np.median(d[texto][et_all == j]) if (et_all == j).any() else 0 for j in range(2)]
         jc_ = int(np.argmax(fb))
         f_ = c2[1 - jc_]
-        b_ = np.asarray(est_fondo := np.median(crop[anillo], 0), np.float32)
+        b_ = np.asarray(np.median(crop[anillo], 0), np.float32)
         v_ = f_ - b_
         s_ = float(np.dot(c2[jc_] - b_, v_) / (np.dot(v_, v_) + 1e-6))
         dist_linea = float(np.linalg.norm((c2[jc_] - b_) - s_ * v_))
@@ -335,6 +334,12 @@ def analizar(arr, caja, otras=(), filas_ocr=None):
     ys, xs = np.nonzero(texto)
     tinta = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
     filas = _bandas(m_rell.any(1)) or [(tinta[1], tinta[3])]
+    if filas_ocr and len(filas) > 1:
+        # solo cuentan las bandas de tinta que son renglones leídos (no la furigana ni adornos)
+        ocr = [(b[1] - cy0, b[3] - cy0) for _, b in filas_ocr]
+        leidas = [(a, b) for a, b in filas
+                  if any(min(b, d) - max(a, c) > 0.3 * (b - a) for c, d in ocr)]
+        filas = leidas or filas
     alineacion = "izq"
     if len(filas) > 1:
         izq, cen = [], []

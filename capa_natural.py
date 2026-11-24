@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image
 
 import estilo
-from nucleo import log
+from nucleo import log, log_limitado
 
 ES_WINDOWS = sys.platform.startswith("win")
 
@@ -504,7 +504,7 @@ class CapaNatural:
                     v.saliendo, v.objetivo = False, 255
                 v.firma = p["firma"]
             except Exception:
-                log.exception("Mostrando una pieza")
+                log_limitado("pieza", "Mostrando una pieza")
         self._animar()
 
     def _quitar(self, clave, v):

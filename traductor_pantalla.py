@@ -31,6 +31,9 @@ VIVO = envivo.ES_WINDOWS or os.environ.get("TRADUCTOR_VIVO") == "1"
 ACCIONES_APP = ACCIONES_VIVO if VIVO else ACCIONES_FIJO
 
 PUERTO_INSTANCIA = 47653
+AVISO_NEGRO = ("No consigo ver la imagen del juego: la captura sale negra. Si el juego está en "
+               "pantalla completa, cámbialo a «ventana sin bordes» (o «ventana») en sus opciones, o "
+               "prueba Alt+Enter; así el traductor puede leerlo y dibujar encima.")
 CANDADO = None          # socket que impide abrir el programa dos veces
 
 
@@ -114,19 +117,18 @@ class App:
     # Construcción de la ventana principal
     # ======================================================================
     def _crear_icono(self):
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.rounded_rectangle((2, 2, 62, 62), radius=14, fill=(74, 8, 22))
-        f = nucleo.cargar_fuente("Arial", 30, True)
-        d.text((10, 14), "A", font=f, fill=(245, 238, 220))
-        d.text((32, 22), "ñ", font=f, fill=(255, 210, 90))
-        self._icono_pil = img
-        return ImageTk.PhotoImage(img, master=self.root)
+        import marca
+        # bandeja: cada tamaño dibujado aparte (16-24 px sin medalla), no una reducción borrosa
+        self._icono_pil = marca.emblema(32).copy()
+        self._icono_pil.encoderinfo = {"sizes": [(16, 16), (20, 20), (24, 24), (32, 32)],
+                                       "append_images": [marca.emblema(t) for t in (16, 20, 24)]}
+        self._iconos = [ImageTk.PhotoImage(marca.emblema(t), master=self.root) for t in (16, 24, 32, 48, 64, 256)]
+        return self._iconos[0]
 
     def poner_icono(self, ventana):
         ventana.es_del_traductor = True       # marca las ventanas propias del programa
         try:
-            ventana.iconphoto(False, self._icono)
+            ventana.iconphoto(False, *self._iconos)     # Windows elige el tamaño justo
         except Exception:
             pass
         try:
@@ -146,50 +148,74 @@ class App:
         self.fuente_titulo.configure(size=tam + 4)
         self.fuente_mono.configure(size=tam)
         tema.aplicar(self.root, tam)
+        self._dibujar_marca()
 
     def _construir(self):
+        import marca
         r = self.root
         r.resizable(False, False)
         r.attributes("-topmost", bool(self.cfg["siempre_visible"]))
-        f = ttk.Frame(r, padding=(18, 14, 18, 12))
+        f = ttk.Frame(r, padding=(20, 16, 20, 12))
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="Traductor de Pantalla", style="Titulo.TLabel").pack(anchor="w")
-        self.lbl_sub = ttk.Label(f, style="Tenue.TLabel")
-        self.lbl_sub.pack(anchor="w")
-        ttk.Frame(f, style="Linea.TFrame", height=2).pack(fill="x", pady=(8, 12))
+        ls = self.fuente_ui.metrics("linespace")
+        ancho_txt = int(ls * 27)
 
+        # ---- cabecera: emblema + nombre ----
+        cab = ttk.Frame(f)
+        cab.pack(fill="x")
+        self._lbl_emblema = ttk.Label(cab)
+        self._lbl_emblema.pack(side="left", padx=(0, 12))
+        nombre = ttk.Frame(cab)
+        nombre.pack(side="left", fill="x", expand=True)
+        self._lbl_logo = ttk.Label(nombre, text="Traductor de Pantalla", style="Titulo.TLabel")
+        self._lbl_logo.pack(anchor="w", pady=(2, 4))
+        self.lbl_sub = ttk.Label(nombre, style="Lema.TLabel")
+        self.lbl_sub.pack(anchor="w")
+        tema.Filete(f).pack(fill="x", pady=(12, 14))
+
+        # ---- el camino: un botón principal ----
         self.botones = {}
         self._dobles = set()          # botones de la rejilla: nombre arriba, atajo abajo
+        f_titulo = tkfont.Font(r, family=self.fuente_ui.actual("family"),
+                               size=self.fuente_ui.actual("size") + 1, weight="bold")
+        f_tarjeta = tkfont.Font(r, family=self.fuente_ui.actual("family"),
+                                size=self.fuente_ui.actual("size"), weight="bold")
+        f_atajo = tkfont.Font(r, family=self.fuente_ui.actual("family"),
+                              size=max(7, self.fuente_ui.actual("size") - 1))
+        self._fuentes_botones = (f_titulo, f_tarjeta, f_atajo)
         if VIVO:
-            principal = ("anclar", "Traducir un juego o programa")
-            resto = (("subtitulos", "Subtítulos de pantalla"), ("voz", "Subtítulos de voz"),
-                     ("portapapeles", "Traducir lo copiado"), ("detener", "■ Detener"))
+            principal = ("anclar", "Traducir un juego o programa", "mando")
+            resto = (("subtitulos", "Subtítulos de pantalla", "subtitulos"), ("voz", "Subtítulos de voz", "voz"),
+                     ("portapapeles", "Traducir lo copiado", "copiado"), ("detener", "Detener", "detener"))
         else:
-            principal = ("zona", "Traducir una zona")
-            resto = (("pantalla", "Pantalla completa"), ("subtitulos", "Subtítulos de pantalla"),
-                     ("voz", "Subtítulos de voz"), ("portapapeles", "Traducir lo copiado"),
-                     ("detener", "■ Detener"))
-        b = ttk.Button(f, style="Grande.Acento.TButton", command=lambda a=principal[0]: self.accion(a))
-        b.pack(fill="x", pady=(0, 3))
+            principal = ("zona", "Traducir una zona", "subtitulos")
+            resto = (("pantalla", "Pantalla completa", "subtitulos"), ("subtitulos", "Subtítulos de pantalla", "subtitulos"),
+                     ("voz", "Subtítulos de voz", "voz"), ("portapapeles", "Traducir lo copiado", "copiado"),
+                     ("detener", "Detener", "detener"))
+        b = tema.Boton(f, lambda a=principal[0]: self.accion(a), principal[1], icono=principal[2],
+                       variante="principal", fuente=f_titulo, fuente_atajo=f_atajo)
+        b.pack(fill="x")
         self.botones[principal[0]] = (b, principal[1])
         if VIVO:
-            ttk.Label(f, style="Tenue.TLabel", wraplength=470, justify="left",
-                      text="Abre tu juego y pulsa el atajo (o este botón y luego haz clic en el juego). "
-                           "La traducción ocupa el lugar del texto, con su misma letra, y la próxima vez "
-                           "que abras ese juego empieza sola.").pack(anchor="w", pady=(2, 8))
+            self._lbl_ayuda = ttk.Label(
+                f, style="Tenue.TLabel", wraplength=ancho_txt, justify="left",
+                text="Abre tu juego, pulsa el botón (o el atajo) y haz clic en el juego. La traducción "
+                     "ocupa el lugar del texto, con su misma letra, y la próxima vez empieza sola.")
+            self._lbl_ayuda.pack(anchor="w", pady=(7, 12))
         rej = ttk.Frame(f)
-        rej.pack(fill="x", pady=(0, 10))
-        for i, (accion, texto) in enumerate(resto):
-            b = ttk.Button(rej, style="Doble.TButton",
-                           command=(self.detener if accion == "detener" else (lambda a=accion: self.accion(a))))
-            b.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 3) if i % 2 == 0 else (0, 0), pady=(0, 3))
+        rej.pack(fill="x", pady=(0, 12))
+        for i, (accion, texto, icono) in enumerate(resto):
+            b = tema.Boton(rej, (self.detener if accion == "detener" else (lambda a=accion: self.accion(a))),
+                           texto, icono=icono, variante="tarjeta", fuente=f_tarjeta, fuente_atajo=f_atajo)
+            b.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, 4) if i % 2 == 0 else (4, 0), pady=(0, 8))
             self.botones[accion] = (b, texto)
             self._dobles.add(accion)
         rej.columnconfigure(0, weight=1, uniform="a")
         rej.columnconfigure(1, weight=1, uniform="a")
         self._textos_botones()
 
-        ttk.Label(f, text="IDIOMAS", style="Seccion.TLabel").pack(anchor="w", pady=(2, 3))
+        # ---- idiomas ----
+        ttk.Label(f, text="IDIOMAS", style="Seccion.TLabel").pack(anchor="w", pady=(0, 4))
         idi = ttk.Frame(f)
         idi.pack(fill="x")
         self.v_idioma = tk.StringVar(r, value=self.cfg["idioma_origen"])
@@ -199,7 +225,8 @@ class App:
         self.cb_origen.bind("<<ComboboxSelected>>",
                             lambda e: self.v_idioma.set(self._origenes[self.cb_origen.get()]))
         self.v_idioma.trace_add("write", lambda *_: self._origen_cambiado())
-        ttk.Label(idi, text="→", style="Tenue.TLabel").pack(side="left", padx=8)
+        self._lbl_flecha = ttk.Label(idi)
+        self._lbl_flecha.pack(side="left", padx=8)
         import traduccion
         self._idiomas_dest = {v: k for k, v in traduccion.IDIOMAS_DESTINO.items()}
         self.cb_destino = ttk.Combobox(idi, state="readonly", width=16,
@@ -208,46 +235,85 @@ class App:
         self.cb_destino.pack(side="left", fill="x", expand=True)
         self.cb_destino.bind("<<ComboboxSelected>>", lambda e: self._cambiar_destino())
         self.lbl_motor = ttk.Label(f, style="Tenue.TLabel")
-        self.lbl_motor.pack(anchor="w", pady=(3, 8))
+        self.lbl_motor.pack(anchor="w", pady=(4, 10))
         self._sincronizar_origen()
 
+        # ---- última traducción ----
         ult = ttk.Frame(f)
-        ult.pack(fill="x", pady=(0, 8))
-        ttk.Label(ult, text="Última traducción:", style="Tenue.TLabel").pack(side="left")
+        ult.pack(fill="x", pady=(0, 6))
+        ttk.Label(ult, text="Última traducción", style="Tenue.TLabel").pack(side="left", padx=(0, 6))
         self.botones_ultima = []
         for texto, fn in (("Copiar", lambda: self.copiar_texto(ventanas.texto_de(self.ultimos_bloques))),
-                          ("Leer", lambda: self.leer(ventanas.texto_de(self.ultimos_bloques))),
+                          ("Leer en voz alta", lambda: self.leer(ventanas.texto_de(self.ultimos_bloques))),
                           ("Ver texto", lambda: self.panel.mostrar(self.ultimos_bloques))):
-            b = ttk.Button(ult, text=texto, command=fn, width=9)
-            b.pack(side="left", padx=2)
+            b = ttk.Button(ult, text=texto, command=fn, style="Enlace.TButton", width=0)
+            b.pack(side="left")
             self.botones_ultima.append(b)
 
-        fila = ttk.Frame(f)
-        fila.pack(fill="x")
+        # ---- pie: herramientas y estado ----
+        ttk.Frame(f, style="Linea2.TFrame", height=1).pack(fill="x", pady=(4, 6))
+        pie = ttk.Frame(f)
+        pie.pack(fill="x")
         for i, (texto, fn) in enumerate((("Historial", self.abrir_historial),
                                          ("Mi glosario", self.abrir_glosario),
                                          ("Ajustes", self.abrir_config),
                                          ("Ayuda", lambda: ventanas.ventana_ayuda(self)),
-                                         ("Actualizar", lambda: self.buscar_actualizacion(True)),
-                                         ("Salir", self.salir))):
-            ttk.Button(fila, text=texto, command=fn).grid(row=i // 3, column=i % 3, sticky="we",
-                                                          padx=1, pady=1)
-        for c in range(3):
-            fila.columnconfigure(c, weight=1, uniform="b")
+                                         ("Actualizar", lambda: self.buscar_actualizacion(True)))):
+            ttk.Button(pie, text=texto, command=fn, style="Enlace.TButton", width=0).grid(
+                row=0, column=i, sticky="we")
+            pie.columnconfigure(i, weight=1, uniform="p")
 
         self.btn_novedad = ttk.Button(f, style="Grande.Acento.TButton", command=self._instalar_novedad)
         self.novedad = None
-        self.barra_prog = ttk.Progressbar(f, mode="indeterminate")
-        self.barra_prog.pack(fill="x", pady=(10, 4))
-        self.lbl_estado = ttk.Label(f, text="Iniciando…", wraplength=470, justify="left")
-        self.lbl_estado.pack(anchor="w")
+        self.barra_prog = ttk.Progressbar(f, mode="indeterminate", style="Quieta.Horizontal.TProgressbar")
+        self.barra_prog.pack(fill="x", pady=(8, 6))
+        est = ttk.Frame(f)
+        est.pack(fill="x")
+        self.punto = tema.Punto(est, lado=max(8, int(ls * 0.55)))
+        self.punto.pack(side="left", anchor="n", pady=(int(ls * 0.25), 0), padx=(0, 8))
+        self.lbl_estado = ttk.Label(est, text="Iniciando…", wraplength=ancho_txt - 20, justify="left")
+        self.lbl_estado.pack(side="left", anchor="w", fill="x", expand=True)
 
         # teclado: Enter pulsa el botón enfocado
         r.bind_class("TButton", "<Return>", lambda e: e.widget.invoke())
         r.bind_class("TRadiobutton", "<Return>", lambda e: e.widget.invoke())
         r.bind_class("TCheckbutton", "<Return>", lambda e: e.widget.invoke())
         r.bind("<F1>", lambda e: ventanas.ventana_ayuda(self))
+        self._dibujar_marca()
         self._actualizar_botones()
+
+    def _dibujar_marca(self):
+        """Emblema, nombre e iconos al tamaño de la letra actual (también al cambiar el tamaño)."""
+        import marca
+        if not hasattr(self, "_lbl_emblema"):
+            return
+        ls = self.fuente_ui.metrics("linespace")
+        base = self.fuente_ui.actual("size")
+        for fnt, tam in zip(self._fuentes_botones, (base + 1, base, max(7, base - 1))):
+            fnt.configure(size=tam)
+        for b, _ in self.botones.values():
+            if isinstance(b, tema.Boton):
+                b.reajustar()
+        self._img_emblema = ImageTk.PhotoImage(marca.emblema(int(ls * 3.4)), master=self.root)
+        self._lbl_emblema.configure(image=self._img_emblema)
+        logo = None
+        try:
+            logo = marca.logotipo(int(ls * 0.86))
+        except Exception:
+            log.exception("Logotipo")
+        if logo is not None:
+            self._img_logo = ImageTk.PhotoImage(logo, master=self.root)
+            self._lbl_logo.configure(image=self._img_logo, text="")
+        self._img_flecha = ImageTk.PhotoImage(marca.icono_ui("flecha", int(ls * 0.95), tema._rgb(tema.VINO_TEXTO)),
+                                              master=self.root)
+        self._lbl_flecha.configure(image=self._img_flecha)
+        ancho = int(ls * 27)
+        for lbl in (getattr(self, "_lbl_ayuda", None), self.lbl_estado):
+            if lbl is not None:
+                lbl.configure(wraplength=ancho - (20 if lbl is self.lbl_estado else 0))
+        self.punto.configure(width=max(8, int(ls * 0.55)), height=max(8, int(ls * 0.55)))
+        self.punto.lado = max(8, int(ls * 0.55))
+        self.punto.redibujar()
 
     # ---------- idiomas ----------
     def _sincronizar_origen(self):
@@ -264,12 +330,11 @@ class App:
 
     def _textos_botones(self):
         for accion, (b, texto) in self.botones.items():
-            if accion not in self.cfg["atajos"]:
-                b.configure(text=texto)
-                continue
-            atajo = atajo_legible(self.cfg["atajos"][accion]) if self.cfg["atajos_activos"] else ""
-            if accion in getattr(self, "_dobles", ()):
-                b.configure(text=f"{texto}\n{atajo}" if atajo else texto)
+            atajo = ""
+            if accion in self.cfg["atajos"] and self.cfg["atajos_activos"]:
+                atajo = atajo_legible(self.cfg["atajos"][accion])
+            if isinstance(b, tema.Boton):
+                b.poner_texto(texto, atajo)
             else:
                 b.configure(text=f"{texto}    ({atajo})" if atajo else texto)
 
@@ -284,15 +349,39 @@ class App:
         self.botones["subtitulos"][0].state(["!disabled"] if self.listo and not self.ocupado else ["disabled"])
         for b in self.botones_ultima:
             b.state(["!disabled"] if self.ultimos_bloques else ["disabled"])
-        self.botones["detener"][0].state(["!disabled"] if hay_algo else ["disabled"])
+        detener = self.botones["detener"][0]
+        detener.state(["!disabled"] if hay_algo else ["disabled"])
+        if isinstance(detener, tema.Boton):
+            detener.poner_variante("peligro" if hay_algo else "tarjeta")
         if self.ocupado != getattr(self, "_animando", False):
             self._animando = self.ocupado
             if self.ocupado:
+                self.barra_prog.configure(style="Fina.Horizontal.TProgressbar")
                 self.barra_prog.start(12)
             else:
                 self.barra_prog.stop()
+                self.barra_prog.configure(style="Quieta.Horizontal.TProgressbar")
+        if hasattr(self, "punto"):
+            if getattr(self, "_estado_error", False):
+                tipo = "error"
+            elif not self.listo:
+                tipo = "cargando"
+            elif self.vivo is not None or self.voz_subs is not None:
+                tipo = "vivo"
+            elif self.ocupado:
+                tipo = "ocupado"
+            else:
+                tipo = "listo"
+            self.punto.poner(tipo)
+
+    def avisar(self, texto, error=False):
+        """Mensaje importante: en la ventana y, si está escondida, como aviso de Windows."""
+        self.estado(texto, error=error)
+        if self.bandeja is not None and self.root.state() != "normal":
+            self.bandeja.avisar(texto)
 
     def estado(self, texto, error=False):
+        self._estado_error = error
         self.lbl_estado.configure(text=texto, foreground=tema.ERROR if error else tema.HUESO)
 
     def _cambiar(self, clave, valor):
@@ -325,19 +414,18 @@ class App:
     def _registrar_atajos(self):
         if self._hk is not None:
             try:
-                self._hk.stop()
+                self._hk.detener()
             except Exception:
                 pass
             self._hk = None
         if not self.cfg["atajos_activos"]:
             return
         try:
-            from pynput import keyboard
-            mapa = {atajo_pynput(self.cfg["atajos"][a]): (lambda a=a: self.cola.put(("atajo", a)))
-                    for a in ACCIONES_APP if a not in ACCIONES_MANTENER}
-            self._hk = keyboard.GlobalHotKeys(mapa)
-            self._hk.daemon = True
-            self._hk.start()
+            import atajos
+            mapa = {a: self.cfg["atajos"][a] for a in ACCIONES_APP if a not in ACCIONES_MANTENER}
+            self._hk = atajos.Atajos(mapa, lambda a: self.cola.put(("atajo", a))).iniciar()
+            if self._hk.respaldo:
+                log.info("Atajos con respaldo pynput: %s", ", ".join(self._hk.respaldo))
         except Exception as e:
             log.exception("Atajos globales no disponibles")
             self.cola.put(("estado", f"Atajos globales no disponibles ({e}). Usa los botones."))
@@ -382,6 +470,9 @@ class App:
                             self.barra_voz.estado(texto if len(texto) < 90 else texto[:87] + "…")
                         if not sesion.activo:
                             self.detener_voz()
+                elif tipo == "aviso_juego":
+                    if dato is self.vivo:
+                        self.avisar(AVISO_NEGRO, error=True)
                 elif tipo == "vivo_cerrada":
                     if dato is self.vivo:
                         self.detener_vivo()
@@ -682,6 +773,8 @@ class App:
                 self.leer(ventanas.texto_de(nuevos))
         if sesion.lecturas <= 1 or nuevos:
             self._ocultar_mis_ventanas(True)     # por si se abrió una ventana nueva
+        if sesion.aviso_negro and sesion._negras > 0:
+            return                               # el aviso de imagen negra sigue a la vista
         que = {"subtitulos": "subtítulos", "zona": "zona", "pantalla": "pantalla"}[sesion.tipo]
         if sesion.ventana:
             que += f" de {sesion.titulo[:30]}"
@@ -816,9 +909,12 @@ class App:
                 self.cola.put(("llamar", lambda: self._paquete_descargado(n, carpeta)))
             except Exception as e:
                 log.exception("Descargando la versión completa")
-                self.cola.put(("llamar", lambda: (self.estado(f"No se pudo descargar la versión completa: {e}",
-                                                              error=True),
-                                                  self.btn_novedad.state(["!disabled"]))))
+                motivo = str(e)          # 'e' deja de existir al salir del except: guardar el texto
+
+                def avisar():
+                    self.estado(f"No se pudo descargar la versión completa: {motivo}", error=True)
+                    self.btn_novedad.state(["!disabled"])
+                self.cola.put(("llamar", avisar))
         threading.Thread(target=tarea, daemon=True).start()
 
     def _paquete_descargado(self, n, carpeta):
@@ -845,7 +941,6 @@ class App:
         self.guardar_cfg()
         if self.motor.memoria is not None:
             self.motor.memoria.cerrar()
-        global CANDADO
         if CANDADO is not None:
             CANDADO.close()
 
@@ -887,7 +982,7 @@ class App:
             return ""
         if getattr(lec, "faltan", None):
             return (f"Falta el lector de {' y '.join(lec.faltan)} de Windows: "
-                    f"Configuración → «Instalar lectores».")
+                    f"Ajustes → Traducción → «Instalar lectores».")
         return f"Lector: {lec.nombre}."
 
     def detener(self):
@@ -1278,7 +1373,7 @@ class App:
                 log.exception("Instalando la versión completa al cerrar")
         try:
             if self._hk is not None:
-                self._hk.stop()
+                self._hk.detener()
             self._quitar_bandeja()
             self.detener_vivo()
             self.detener_voz()
@@ -1366,6 +1461,10 @@ def autoprueba():
             ok = autoprueba_anclado(m, lineas)
         if ok and envivo.ES_WINDOWS:
             ok = autoprueba_natural(m, lineas)
+        if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_robustez(m, lineas)
+        if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_furigana(m, lineas)
         if ok and envivo.ES_WINDOWS:
             ok = autoprueba_instalador(lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
@@ -1581,6 +1680,212 @@ def _escena_prueba(lineas=("I never thought I'd see this place again.", "The lan
     return img.convert("RGB")
 
 
+def _escena_furigana():
+    """Diálogo japonés con furigana (kana pequeña encima de los kanji)."""
+    W, H = 900, 300
+    img = Image.new("RGB", (W, H), (34, 30, 52))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((30, 110, 870, 285), radius=14, fill=(16, 14, 30), outline=(200, 190, 230), width=2)
+    f = nucleo.cargar_fuente_cjk(36)
+    fr = nucleo.cargar_fuente_cjk(16)
+    if f is None or fr is None:
+        return None
+    x0, y0 = 64, 176
+    texto = "魔法の剣を手に入れた。"
+    d.text((x0, y0), texto, font=f, fill=(236, 232, 242))
+    for palabra, lectura in (("魔法", "まほう"), ("剣", "けん")):
+        i = texto.index(palabra)
+        xa = x0 + f.getlength(texto[:i])
+        ancho = f.getlength(palabra)
+        d.text((xa + (ancho - fr.getlength(lectura)) / 2, y0 - 22), lectura, font=fr, fill=(236, 232, 242))
+    return img
+
+
+def autoprueba_furigana(m, lineas):
+    """La furigana no se traduce aparte y se borra junto con su renglón."""
+    lineas.append("--- Prueba FURIGANA ---")
+    if not m.lector.tiene_japones:
+        lineas.append("Sin lector japonés: prueba omitida")
+        return True
+    escena = _escena_furigana()
+    if escena is None:
+        lineas.append("Sin letra japonesa: prueba omitida")
+        return True
+    crudas = m.lector.leer(escena)
+    lineas.append(f"Renglones del lector: {[(x['t'], round(x['y1'] - x['y0'])) for x in crudas]}")
+    pars = m.leer_parrafos(escena, "auto", True)
+    kana_suelta = [p for p in pars if nucleo._KANA_SOLO.match(p["t"]) and len(p["t"]) <= 6]
+    principal = next((p for p in pars if "剣" in p["t"] or "魔" in p["t"]), None)
+    con_rubi = principal is not None and principal["caja"][1] < principal["filas"][0][1][1] - 3
+    hubo_rubi = any(nucleo._KANA_SOLO.match(x["t"]) for x in crudas)
+    ok = principal is not None and not kana_suelta
+    lineas.append(f"Furigana fuera del texto: {'OK' if ok else 'FALLO'} · párrafos {[p['t'] for p in pars]}"
+                  f" · el lector la vio: {'sí' if hubo_rubi else 'no'} · se borra con su renglón: "
+                  f"{'sí' if con_rubi else ('no hacía falta' if not hubo_rubi else 'NO')}")
+    if hubo_rubi and not con_rubi:
+        ok = False
+    # verla de verdad en el estilo natural
+    try:
+        app = App(motor=m)
+        r = app.root
+        r.withdraw()
+
+        def bombear(segundos, hasta=lambda: False):
+            fin = time.time() + segundos
+            while time.time() < fin:
+                r.update()
+                if hasta():
+                    return True
+                time.sleep(0.03)
+            return hasta()
+        juego = tk.Toplevel(r)
+        juego.title("Novela japonesa de prueba")
+        juego.geometry(f"{escena.width}x{escena.height}+120+140")
+        foto = ImageTk.PhotoImage(escena, master=juego)
+        tk.Label(juego, image=foto, bd=0, highlightthickness=0).pack()
+        juego.foto = foto
+        bombear(0.8)
+        juego.lift()
+        juego.focus_force()
+        bombear(0.6)
+        hw = envivo.hwnd_de(juego)
+        rect = envivo.rect_cliente(hw)
+        app.iniciar_vivo(rect, None, ventana=hw)
+        listo = bombear(40, lambda: app.vivo is not None and app.vivo.natural is not None
+                        and len(app.vivo.natural.piezas) >= 1
+                        and all(p.alfa >= 255 for p in app.vivo.natural.piezas.values()))
+        if listo:
+            import mss
+            app.vivo.natural.permitir_captura(True)
+            bombear(0.4)
+            with mss.mss() as sct:
+                sh = sct.grab(rect)
+            app.vivo.natural.permitir_captura(False)
+            Image.frombytes("RGB", sh.size, sh.bgra, "raw", "BGRX").save(
+                os.path.join(nucleo.BASE, "capturas_prueba", "8_furigana.png"))
+        lineas.append(f"Furigana en el estilo natural: {'OK' if listo else 'FALLO'} · "
+                      f"{[b['traduccion'] for b in app.vivo.bloques] if app.vivo else None}")
+        ok = ok and listo
+        app.detener()
+        bombear(0.4)
+        for w in r.winfo_children():
+            if isinstance(w, tk.Toplevel):
+                w.destroy()
+        r.withdraw()
+    except Exception:
+        import traceback
+        lineas.append("Furigana en el estilo natural: FALLO\n" + traceback.format_exc())
+        ok = False
+    return ok
+
+
+def autoprueba_robustez(m, lineas):
+    """Atajos con RegisterHotKey, captura negra (leer la ventana y avisar), una sola copia
+    abierta (y mostrar la que ya estaba) y registro con tamaño limitado."""
+    import ctypes
+    import logging
+    import tempfile
+    import types
+    import atajos
+    lineas.append("--- Prueba ROBUSTEZ ---")
+    u32 = ctypes.windll.user32
+    # --- atajos ---
+    recibido = []
+    hk = atajos.Atajos({"prueba": {"ctrl": True, "alt": True, "shift": True, "tecla": "F11"}},
+                       recibido.append).iniciar()
+    time.sleep(0.3)
+    for vk in (0x11, 0x12, 0x10, 0x7A):
+        u32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.05)
+    for vk in (0x7A, 0x10, 0x12, 0x11):
+        u32.keybd_event(vk, 0, 2, 0)
+    fin = time.time() + 3
+    while not recibido and time.time() < fin:
+        time.sleep(0.05)
+    hk.detener()
+    ok_at = recibido == ["prueba"] and "prueba" in hk.registrados
+    lineas.append(f"Atajo con RegisterHotKey: {'OK' if ok_at else 'FALLO'} (registrados {hk.registrados}, "
+                  f"respaldo {hk.respaldo}, recibido {recibido})")
+    # --- una sola copia: el segundo intento no toma el candado y la ventana abierta se muestra ---
+    c1 = _tomar_candado(1)
+    c2 = _tomar_candado(1)
+    ok_c = c1 is not None and c2 is None
+    if c1 is not None:
+        c1.close()
+    c3 = _tomar_candado(1)
+    ok_c = ok_c and c3 is not None
+    if c3 is not None:
+        c3.close()
+    app = App(motor=m)
+    r = app.root
+
+    def bombear(segundos, hasta=lambda: False):
+        fin = time.time() + segundos
+        while time.time() < fin:
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.03)
+        return hasta()
+    _escuchar_otras_aperturas(app)
+    r.withdraw()
+    bombear(0.5)
+    avisado = _pedir_que_se_muestre()
+    visible = bombear(3, lambda: r.state() == "normal")
+    ok_c = ok_c and avisado and visible
+    lineas.append(f"Una sola copia y mostrar la abierta: {'OK' if ok_c else 'FALLO'} (aviso {avisado}, "
+                  f"ventana visible {visible})")
+    r.withdraw()
+    # --- captura negra: se lee la ventana del juego; si tampoco se ve, se avisa ---
+    escena = _escena_prueba()
+    juego = tk.Toplevel(r)
+    juego.title("Juego en pantalla completa (simulado)")
+    juego.geometry(f"{escena.width}x{escena.height}+120+140")
+    foto = ImageTk.PhotoImage(escena, master=juego)
+    tk.Label(juego, image=foto, bd=0, highlightthickness=0).pack()
+    juego.foto = foto
+    bombear(0.8)
+    juego.lift()
+    juego.focus_force()
+    bombear(0.6)
+    hw = envivo.hwnd_de(juego)
+    rect = envivo.rect_cliente(hw)
+    app.iniciar_vivo(rect, None, ventana=hw)
+    v = app.vivo
+    negro = types.SimpleNamespace(grab=lambda reg: types.SimpleNamespace(
+        size=(reg["width"], reg["height"]), bgra=bytes(reg["width"] * reg["height"] * 4)), close=lambda: None)
+    v._sct = negro                                  # la captura normal "no ve" el juego
+    ok_v = bombear(40, lambda: v._metodo == "ventana" and len(v.bloques) >= 2 and v.natural is not None
+                   and len(v.natural.piezas) >= 1)
+    lineas.append(f"Captura negra → leer la ventana del juego: {'OK' if ok_v else 'FALLO'} (método {v._metodo}, "
+                  f"textos {[b['traduccion'] for b in v.bloques]})")
+    original = envivo.capturar_hwnd
+    envivo.capturar_hwnd = lambda hwnd, reg: Image.new("RGB", (reg["width"], reg["height"]))
+    v._metodo, v._negras, v.aviso_negro = "pantalla", 0, False
+    ok_a = bombear(25, lambda: app.lbl_estado.cget("text") == AVISO_NEGRO)
+    envivo.capturar_hwnd = original
+    lineas.append(f"Captura negra sin remedio → aviso: {'OK' if ok_a else 'FALLO'}")
+    app.detener()
+    bombear(0.4)
+    for w in r.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    r.withdraw()
+    # --- registro con tamaño limitado ---
+    carpeta = tempfile.mkdtemp()
+    ruta = os.path.join(carpeta, "registro.txt")
+    h = nucleo._RegistroLimitado(ruta, encoding="utf-8", delay=True)
+    lg = logging.getLogger("prueba_registro")
+    lg.propagate = False
+    lg.addHandler(h)
+    for _ in range(2600):
+        lg.warning("x" * 1000)
+    h.close()
+    ok_r = os.path.exists(os.path.join(carpeta, "registro_anterior.txt")) and os.path.getsize(ruta) < 2_100_000
+    lineas.append(f"Registro limitado a 2 MB: {'OK' if ok_r else 'FALLO'}")
+    return ok_at and ok_c and ok_v and ok_a and ok_r
+
+
 def _foto_ventana(win, ruta):
     """Captura de una ventana del programa tal y como se ve (con su barra de título)."""
     import ctypes
@@ -1699,6 +2004,18 @@ def autoprueba_natural(m, lineas):
         lineas.append(f"Ver el original (tecla mantenida): {'OK' if ok3 else 'FALLO'} (cambio medio {d2:.1f})")
         ok4 = _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas)
         ok3 = ok3 and ok4
+        try:                                  # la ventana principal mientras traduce (Detener activo)
+            app.estado(f"Traduciendo en vivo: {juego.title()}")
+            r.deiconify()
+            r.geometry("+470+0")
+            bombear(0.3)
+            envivo.excluir_de_captura(r, False)       # en vivo no sale en capturas: solo para la foto
+            _foto_ventana(r, os.path.join(carpeta, "4b_ventana_en_vivo.png"))
+            envivo.excluir_de_captura(r, True)
+            r.withdraw()
+            bombear(0.3)
+        except Exception as e:
+            lineas.append(f"Captura en vivo: no se pudo hacer ({e})")
     app.detener()
     bombear(0.6)
     # capturas de la interfaz (para revisar el diseño)
@@ -2058,29 +2375,103 @@ def main():
         demostracion()
     if "--autoprueba" in sys.argv:
         autoprueba()
-    # Evitar abrirlo dos veces (los atajos chocarían)
+    # Evitar abrirlo dos veces (los atajos chocarían). Si ya está abierto, se muestra ese.
     global CANDADO
-    candado = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    intentos = 30 if os.environ.pop("TRADUCTOR_REINICIO", "") else 1
-    for intento in range(intentos):  # tras una actualización, esperar a que se cierre la anterior
-        try:
-            candado.bind(("127.0.0.1", PUERTO_INSTANCIA))
-            break
-        except OSError:
-            time.sleep(0.2)
-    else:
-        r = tk.Tk()
-        r.withdraw()
-        messagebox.showinfo("Traductor de Pantalla", "El traductor ya está abierto.")
+    reinicio = bool(os.environ.pop("TRADUCTOR_REINICIO", ""))
+    candado = _tomar_candado(30 if reinicio else 1)     # tras actualizar, esperar a que cierre el anterior
+    if candado is None:
+        if not _pedir_que_se_muestre():
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showinfo("Traductor de Pantalla", "El traductor ya está abierto.")
         return
     CANDADO = candado
     try:
-        App().correr()
+        app = App()
+        _escuchar_otras_aperturas(app)
+        app.correr()
     except Exception:
         log.exception("Error fatal")
         raise
     finally:
         candado.close()
+
+
+class _Candado:
+    """Exclusión entre copias del programa: mutex con nombre en Windows (no depende de que un
+    puerto esté libre); en otros sistemas, un puerto local."""
+
+    def __init__(self):
+        self._mutex = None
+        self._sock = None
+        if envivo.ES_WINDOWS:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateMutexW.restype = ctypes.c_void_p
+            k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            h = k32.CreateMutexW(None, False, "Local\\TraductorDePantalla")
+            if not h:
+                raise OSError("CreateMutexW")
+            if ctypes.get_last_error() == 183:               # ERROR_ALREADY_EXISTS
+                k32.CloseHandle(h)
+                raise OSError("ya abierto")
+            self._mutex, self._k32 = h, k32
+        else:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                self._sock.bind(("127.0.0.1", PUERTO_INSTANCIA))
+            except OSError:
+                self._sock.close()
+                raise
+
+    def close(self):
+        if self._mutex:
+            self._k32.CloseHandle(self._mutex)
+            self._mutex = None
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+
+
+def _tomar_candado(intentos):
+    for _ in range(intentos):
+        try:
+            return _Candado()
+        except OSError:
+            time.sleep(0.2)
+    return None
+
+
+def _pedir_que_se_muestre():
+    """Avisa a la copia abierta para que muestre su ventana. False si no contesta."""
+    try:
+        with socket.create_connection(("127.0.0.1", PUERTO_INSTANCIA + 1), timeout=1.5) as c:
+            c.sendall(b"mostrar")
+        return True
+    except OSError:
+        return False
+
+
+def _escuchar_otras_aperturas(app):
+    def bucle():
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.bind(("127.0.0.1", PUERTO_INSTANCIA + 1))
+            srv.listen(2)
+        except OSError:
+            log.info("Sin aviso entre copias (puerto ocupado)")
+            return
+        while True:
+            try:
+                c, _ = srv.accept()
+                with c:
+                    c.settimeout(2)
+                    if c.recv(16).startswith(b"mostrar"):
+                        app.cola.put(("mostrar", None))
+            except Exception:
+                time.sleep(0.5)
+    threading.Thread(target=bucle, daemon=True, name="otra-copia").start()
 
 
 if __name__ == "__main__":

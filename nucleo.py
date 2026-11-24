@@ -38,20 +38,84 @@ RUTA_PERFILES = os.path.join(BASE, "perfiles.json")
 log = logging.getLogger("traductor")
 
 
+class _RegistroLimitado(logging.FileHandler):
+    """registro.txt que nunca crece sin límite: al pasar de 2 MB pasa a registro_anterior.txt."""
+    LIMITE = 2_000_000
+
+    def emit(self, record):
+        try:
+            if self.stream is not None and self.stream.tell() > self.LIMITE:
+                self.close()
+                anterior = os.path.join(os.path.dirname(self.baseFilename), "registro_anterior.txt")
+                try:
+                    os.replace(self.baseFilename, anterior)
+                except OSError:
+                    open(self.baseFilename, "w").close()
+        except Exception:
+            pass
+        super().emit(record)
+
+
+class _ConsolaAlRegistro:
+    """stderr de la versión .exe (que no tiene consola): cada línea va al registro."""
+
+    def __init__(self):
+        self._buf = ""
+
+    def write(self, texto):
+        self._buf += texto
+        while "\n" in self._buf:
+            linea, self._buf = self._buf.split("\n", 1)
+            if linea.strip():
+                log.warning("[consola] %s", linea)
+        return len(texto)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+_repetidos = {}
+
+
+def log_limitado(clave, mensaje):
+    """Para errores dentro de bucles (cada 60-150 ms): el primero con todos los detalles y
+    luego, como mucho, un aviso por minuto con cuántas veces se repitió."""
+    ahora = time.time()
+    n, desde = _repetidos.get(clave, (0, 0.0))
+    if n == 0 or ahora - desde > 60:
+        log.exception(mensaje if n <= 1 else f"{mensaje} (se repitió {n} veces en el último minuto)")
+        _repetidos[clave] = (1, ahora)
+    else:
+        _repetidos[clave] = (n + 1, desde)
+
+
 def iniciar_registro():
     """Guarda los errores en registro.txt (útil porque en Windows no hay consola)."""
     try:
         if os.path.exists(RUTA_REGISTRO) and os.path.getsize(RUTA_REGISTRO) > 1_000_000:
-            os.remove(RUTA_REGISTRO)
+            os.replace(RUTA_REGISTRO, os.path.join(BASE, "registro_anterior.txt"))
     except OSError:
         pass
-    logging.basicConfig(filename=RUTA_REGISTRO, level=logging.INFO, encoding="utf-8",
-                        format="%(asctime)s %(levelname)s %(message)s")
+    manejador = _RegistroLimitado(RUTA_REGISTRO, encoding="utf-8", delay=True)
+    manejador.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    raiz = logging.getLogger()
+    raiz.addHandler(manejador)
+    raiz.setLevel(logging.INFO)
+    logging.raiseExceptions = False
     # Con pythonw no existen stdout/stderr; algunas librerías fallan si no los hay.
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
     if sys.stderr is None:
-        sys.stderr = open(RUTA_REGISTRO, "a", encoding="utf-8")
+        sys.stderr = _ConsolaAlRegistro()
+
+    def hilo_fallido(args):
+        if args.exc_type is not SystemExit:
+            log.error("Error en el hilo %s", getattr(args.thread, "name", "?"),
+                      exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+    threading.excepthook = hilo_fallido
 
 
 # ============================================================================
@@ -594,7 +658,7 @@ class Motor:
             if not seguir():
                 raise Cancelado()
             t0 = time.perf_counter()
-            filas = self.lector.leer(imagen, modo, seguir)
+            filas = quitar_furigana(self.lector.leer(imagen, modo, seguir))
             t1 = time.perf_counter()
             pars = [p for p in agrupar_parrafos(filas)
                     if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
@@ -618,7 +682,7 @@ class Motor:
             if not seguir():
                 raise Cancelado()
             t0 = time.perf_counter()
-            filas = self.lector.leer(imagen, modo, seguir)
+            filas = quitar_furigana(self.lector.leer(imagen, modo, seguir))
             self.tiempos = (time.perf_counter() - t0, self.tiempos[1])
             return [{"caja": (p["x0"], p["y0"], p["x1"], p["y1"]), "t": p["t"],
                      "idioma": "ja" if p["jp"] else "en", "filas": p["filas"]}
@@ -680,11 +744,48 @@ def unir_misma_linea(trozos):
 _FIN_FRASE = tuple(".!?:;。！？」』…)")
 
 
+_KANA_SOLO = re.compile(r"^[\u3040-\u30ff・ー]+$")
+_KANJI = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf々〆]")
+
+
+def quitar_furigana(filas):
+    """La furigana (kana pequeña encima de los kanji) no es una frase aparte: se quita del texto
+    y su sitio se suma al renglón de abajo, para que también se borre al escribir la traducción."""
+    principales = [f for f in filas if f["jp"] and _KANJI.search(f["t"])]
+    if not principales:
+        return filas
+    fuera = set()
+    for i, r in enumerate(filas):
+        if not r["jp"] or len(r["t"]) > 12 or not _KANA_SOLO.match(r["t"]):
+            continue
+        h = r["y1"] - r["y0"]
+        for f in principales:
+            if f is r:
+                continue
+            hf = f["y1"] - f["y0"]
+            hueco = f["y0"] - r["y1"]
+            if (h <= 0.62 * hf and -0.35 * h <= hueco <= 0.45 * hf
+                    and r["x0"] >= f["x0"] - 0.5 * hf and r["x1"] <= f["x1"] + 0.5 * hf):
+                f.setdefault("rubi", []).append((r["x0"], r["y0"], r["x1"], r["y1"]))
+                fuera.add(i)
+                break
+    return [r for i, r in enumerate(filas) if i not in fuera]
+
+
+def _caja_con_rubi(f):
+    x0, y0, x1, y1 = f["x0"], f["y0"], f["x1"], f["y1"]
+    for a, b, c, d in f.get("rubi", ()):
+        x0, y0, x1, y1 = min(x0, a), min(y0, b), max(x1, c), max(y1, d)
+    return x0, y0, x1, y1
+
+
 def agrupar_parrafos(filas):
-    """Junta renglones de un mismo párrafo (texto que continúa), sin juntar menús."""
+    """Junta renglones de un mismo párrafo (texto que continúa), sin juntar menús.
+    La caja del párrafo incluye la furigana de sus renglones; 'filas' lleva solo los renglones."""
     parrafos = []
     for f in sorted(filas, key=lambda f: (f["y0"], f["x0"])):
         h = f["y1"] - f["y0"]
+        cx0, cy0, cx1, cy1 = _caja_con_rubi(f)
         for p in parrafos:
             u = p["ultima"]
             hu = u["y1"] - u["y0"]
@@ -699,13 +800,13 @@ def agrupar_parrafos(filas):
                     p["t"] = p["t"][:-1] + f["t"]
                 else:
                     p["t"] += " " + f["t"]
-                p["x0"], p["x1"] = min(p["x0"], f["x0"]), max(p["x1"], f["x1"])
-                p["y1"] = max(p["y1"], f["y1"])
+                p["x0"], p["x1"] = min(p["x0"], cx0), max(p["x1"], cx1)
+                p["y0"], p["y1"] = min(p["y0"], cy0), max(p["y1"], cy1)
                 p["ultima"] = f
                 p["filas"].append((f["t"], (f["x0"], f["y0"], f["x1"], f["y1"])))
                 break
         else:
-            parrafos.append({"x0": f["x0"], "y0": f["y0"], "x1": f["x1"], "y1": f["y1"],
+            parrafos.append({"x0": cx0, "y0": cy0, "x1": cx1, "y1": cy1,
                              "t": f["t"], "jp": f["jp"], "ultima": f,
                              "filas": [(f["t"], (f["x0"], f["y0"], f["x1"], f["y1"]))]})
     return parrafos

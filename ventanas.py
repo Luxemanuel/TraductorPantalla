@@ -4,6 +4,7 @@ import copy
 import os
 import shutil
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
 
 from PIL import Image, ImageDraw, ImageTk
@@ -603,7 +604,7 @@ class VentanaConfig:
         try:
             import lector
             ok = lector.instalar_lectores_windows()
-        except Exception as e:
+        except Exception:
             ok = False
             nucleo.log.exception("Instalar lectores")
         if ok:
@@ -1123,7 +1124,17 @@ class MenuRapido:
         borde.pack(fill="both", expand=True)
         f = ttk.Frame(borde, padding=(0, 8, 0, 8))
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="TRADUCTOR DE PANTALLA", style="Seccion.TLabel").pack(anchor="w", padx=12, pady=(0, 6))
+        cab = ttk.Frame(f)
+        cab.pack(anchor="w", padx=12, pady=(0, 6))
+        try:
+            import marca
+            from PIL import ImageTk
+            lado = max(18, int(tkfont.nametofont("TkDefaultFont").metrics("linespace") * 1.3))
+            self._img = ImageTk.PhotoImage(marca.emblema(lado), master=w)
+            ttk.Label(cab, image=self._img).pack(side="left", padx=(0, 8))
+        except Exception:
+            nucleo.log.exception("Emblema del menú rápido")
+        ttk.Label(cab, text="TRADUCTOR DE PANTALLA", style="Seccion.TLabel").pack(side="left")
         nombre = None
         if previa and envivo.ES_WINDOWS and not envivo.es_del_escritorio(previa):
             nombre = envivo.titulo_ventana(previa)[:30]
@@ -1271,6 +1282,16 @@ PANEL DE TEXTO
   Ctrl + / Ctrl −  Agrandar / achicar la letra
   Ctrl+C           Copiar (lo seleccionado o todo)
   Doble clic       Corregir esa frase en tu glosario
+
+SI NO VES LA TRADUCCIÓN
+  · Juego en pantalla completa "exclusiva": Windows no deja dibujar encima.
+    El traductor lo nota (la imagen le llega negra), primero intenta leer la
+    ventana del juego directamente y, si tampoco puede, te avisa. Cambia el
+    juego a "ventana sin bordes" o "ventana" (muchos aceptan Alt+Enter).
+  · Los atajos funcionan aunque el juego se abra como administrador.
+  · Si abres el traductor otra vez, aparece el que ya estaba abierto.
+  · Japonés con furigana (letras pequeñas sobre los kanji): no se traduce
+    aparte; se borra junto con su frase.
 
 CONSEJOS
   · Marcar solo la zona del texto (el cuadro de diálogo) es más rápido que

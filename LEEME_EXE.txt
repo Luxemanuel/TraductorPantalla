@@ -1,4 +1,4 @@
-TRADUCTOR DE PANTALLA  ·  Inglés / Japonés -> Español   (versión .exe)
+TRADUCTOR DE PANTALLA  ·  Inglés / Japonés -> tu idioma   (versión .exe)
 =====================================================================
 
 CÓMO ABRIRLO
@@ -43,6 +43,13 @@ ATAJOS (funcionan en cualquier programa o juego)
   Ctrl+Alt+Espacio  menú rápido junto al cursor (todas las acciones)
   F8 (mantener)     ver el texto original
   También hay un icono junto al reloj con todas las acciones.
+
+SI NO VES LA TRADUCCIÓN
+  Si el juego está en pantalla completa "exclusiva", Windows no deja dibujar
+  encima. El traductor lo nota (la imagen le llega negra), intenta leer la
+  ventana del juego directamente y, si tampoco puede, te avisa: cambia el
+  juego a "ventana sin bordes" o "ventana" (muchos aceptan Alt+Enter).
+  Los atajos funcionan aunque el juego se abra como administrador.
 
 PRIMERA VEZ: LECTOR JAPONÉS
   El lector de texto es el de Windows. Si tu Windows no tiene el japonés,

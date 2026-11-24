@@ -6,6 +6,7 @@ modelos/
 config.json
 historial.json
 registro.txt
+registro_anterior.txt
 autoprueba.txt
 icono.ico
 *.spec

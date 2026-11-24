@@ -24,7 +24,8 @@ REPO = "Luxemanuel/TraductorPantalla"
 PAQUETE = "TraductorPantalla-Windows.zip"
 # lo que es tuyo y nunca se toca al instalar una versión completa
 DATOS = ["config.json", "glosario.json", "historial.json", "memoria.sqlite", "memoria.sqlite-wal",
-         "memoria.sqlite-shm", "perfiles.json", "fuentes_usuario", "registro.txt", "_actualizacion", "_anterior"]
+         "memoria.sqlite-shm", "perfiles.json", "fuentes_usuario", "registro.txt", "registro_anterior.txt", "_actualizacion",
+         "_anterior"]
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PAGINA = f"https://github.com/{REPO}/releases/latest"
 

@@ -34,6 +34,12 @@ class Bandeja:
         self.hilo = threading.Thread(target=self.icono.run, daemon=True)
         self.hilo.start()
 
+    def avisar(self, texto):
+        try:
+            self.icono.notify(texto[:250], "Traductor de Pantalla")
+        except Exception:
+            pass
+
     def cerrar(self):
         try:
             self.icono.stop()
