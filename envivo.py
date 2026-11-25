@@ -648,6 +648,13 @@ class SesionEnVivo:
         import mss
         self.app = app
         self.ruta_exe = ruta_exe
+        self.guion = None                      # juegos Ren'Py: su guion, para leer la frase exacta
+        if ruta_exe:
+            try:
+                import guion
+                guion.cargar_en_segundo_plano(ruta_exe, self._poner_guion)
+            except Exception:
+                log.exception("Guion del juego")
         self.fuente_juego = fuente
         self.letras = letras                   # letras ya decididas para este juego (perfil)
         self.natural = None                    # CapaNatural (traducción integrada en el juego)
@@ -678,6 +685,7 @@ class SesionEnVivo:
         self.oculta = False
         self._capturar_ext = capturar          # para pruebas
         self._sct = None if capturar else mss.mss()
+        self._contexto = {}                    # idioma -> última frase de diálogo (contexto)
         self._metodo = "pantalla"              # "ventana": se lee la ventana del juego (PrintWindow)
         self._negras = 0                       # capturas seguidas que salieron negras
         self.aviso_negro = False
@@ -720,10 +728,15 @@ class SesionEnVivo:
                     break
             t0 = time.perf_counter()
             try:
-                trads = self.app.motor.traducir_lote([(t, i) for _, t, i in lote])
+                # una o dos frases nuevas (diálogo): se traducen con la anterior como contexto
+                ctx = self._contexto if len(lote) <= 2 else None
+                trads = self.app.motor.traducir_lote([(t, i) for _, t, i in lote], contexto=ctx)
             except Exception:
                 log_limitado("traducir", "Traduciendo en segundo plano")
                 trads = [None] * len(lote)
+            for (_, texto, idioma), tr in zip(lote, trads):
+                if tr and (len(texto) >= 8 if idioma in ("ja", "zh") else len(texto.split()) >= 4):
+                    self._contexto[idioma] = texto
             self.app.motor.tiempos = (self.app.motor.tiempos[0], time.perf_counter() - t0)
             with self.cerrojo:
                 validas = []
@@ -734,6 +747,11 @@ class SesionEnVivo:
                         validas.append((l, tr))
                 self._nuevos += self.seguidor.asignar([l for l, _ in validas], [tr for _, tr in validas])
             self.repintar = True
+
+    def _poner_guion(self, g):
+        self.guion = g
+        self.app.cola.put(("estado", f"Juego Ren'Py: se usan las {len(g)} frases de su guion para leer "
+                                     f"el texto exacto."))
 
     def ocupada(self):
         """¿Hay texto cambiando o traducciones por llegar? (entonces se mira más a menudo)"""
@@ -894,6 +912,8 @@ class SesionEnVivo:
             t0 = time.perf_counter()
             try:
                 pars = motor.leer_parrafos(img, modo, omitir, seguir=lambda: self.activa)
+                if self.guion is not None:                 # Ren'Py: la frase exacta del guion
+                    pars = self.guion.corregir(pars)
                 t1 = time.perf_counter()
                 dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
                 with self.cerrojo:

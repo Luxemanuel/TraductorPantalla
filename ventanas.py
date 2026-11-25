@@ -324,8 +324,8 @@ class VentanaConfig:
         f = ttk.Frame(nb, padding=14)
         self._fila(f, "Idioma de origen:", 0)
         cb = ttk.Combobox(f, state="readonly", width=28,
-                          values=["Detectar automáticamente", "Inglés", "Japonés"])
-        self._idiomas = {"Detectar automáticamente": "auto", "Inglés": "en", "Japonés": "ja"}
+                          values=["Detectar automáticamente", "Inglés", "Japonés", "Chino"])
+        self._idiomas = {"Detectar automáticamente": "auto", "Inglés": "en", "Japonés": "ja", "Chino": "zh"}
         cb.set({v: k for k, v in self._idiomas.items()}[self.cfg["idioma_origen"]])
         cb.grid(row=0, column=1, sticky="w")
         self.cb_idioma = cb
@@ -565,11 +565,12 @@ class VentanaConfig:
         lec = getattr(self.app.motor, "lector", None)
         if lec is not None and getattr(lec, "nombre", "") == "Windows":
             faltan = getattr(lec, "faltan", [])
-            txt = ("Lectores de Windows instalados: inglés y japonés ✓" if not faltan else
+            chino = "chino ✓" if getattr(lec, "tiene_chino", False) else "chino: no instalado (solo hace falta para juegos en chino)"
+            txt = (f"Lectores de Windows instalados: inglés y japonés ✓ · {chino}" if not faltan else
                    f"Falta el lector de {' y '.join(faltan)}. Instálalo (gratis, necesita permiso de "
                    f"administrador) y luego reinicia el traductor.")
             ttk.Label(f, text=txt, wraplength=560, justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
-        ttk.Button(f, text="Instalar lectores de inglés y japonés (Windows)…",
+        ttk.Button(f, text="Instalar lectores de inglés, japonés y chino (Windows)…",
                    command=self._instalar_lectores).grid(row=7, column=0, columnspan=2, sticky="w", pady=6)
         ttk.Separator(f).grid(row=8, column=0, columnspan=2, sticky="we", pady=10)
         ttk.Checkbutton(f, text="Recordar las traducciones entre sesiones (lo repetido sale al instante, "
@@ -717,7 +718,7 @@ class VentanaConfig:
 # EDITOR DEL GLOSARIO
 # ============================================================================
 class EditorGlosario:
-    NOMBRES = {"en": "Inglés", "ja": "Japonés"}
+    NOMBRES = {"en": "Inglés", "ja": "Japonés", "zh": "Chino"}
 
     def __init__(self, app, relleno=None):
         self.app = app
@@ -785,7 +786,7 @@ class EditorGlosario:
             self.rellenar(*relleno)
 
     def idioma(self):
-        return "ja" if self.cb.get() == "Japonés" else "en"
+        return {v: k for k, v in self.NOMBRES.items()}.get(self.cb.get(), "en")
 
     def rellenar(self, idioma, original, traduccion):
         self.cb.set(self.NOMBRES.get(idioma, "Inglés"))
@@ -853,8 +854,8 @@ class EditorGlosario:
 # HISTORIAL
 # ============================================================================
 class VentanaHistorial:
-    IDIOMAS = {"Todos": None, "Inglés": "en", "Japonés": "ja"}
-    NOMBRE_IDIOMA = {"en": "Inglés", "ja": "Japonés"}
+    IDIOMAS = {"Todos": None, "Inglés": "en", "Japonés": "ja", "Chino": "zh"}
+    NOMBRE_IDIOMA = {"en": "Inglés", "ja": "Japonés", "zh": "Chino"}
 
     def __init__(self, app):
         self.app = app
@@ -1282,6 +1283,13 @@ PANEL DE TEXTO
   Ctrl + / Ctrl −  Agrandar / achicar la letra
   Ctrl+C           Copiar (lo seleccionado o todo)
   Doble clic       Corregir esa frase en tu glosario
+
+CHINO, NOMBRES Y REN'PY
+  · Chino simplificado o tradicional: se reconoce solo (el japonés lleva
+    kana; el chino no). Si falta el lector chino de Windows, te lo ofrece.
+  · Los nombres de personaje encima del diálogo no se traducen.
+  · Juegos Ren'Py: se lee su guion y se usa la frase exacta.
+  · Cada frase se traduce junto con la anterior del diálogo (contexto).
 
 SI NO VES LA TRADUCCIÓN
   · Juego en pantalla completa "exclusiva": Windows no deja dibujar encima.

@@ -25,6 +25,14 @@ IDIOMAS_DESTINO = {
     "zh": "Chino (simplificado)", "id": "Indonesio", "vi": "Vietnamita", "th": "Tailandés",
 }
 _CODIGO_GOOGLE = {"zh": "zh-CN"}
+# caracteres que solo existen en chino tradicional (para pedirlo como zh-TW)
+_TRADICIONAL = set("們這個來時說會對還過點樣麼體開關門問題國學與為實現後裡發經動應當從見長電話讀請歡務讓")
+
+
+def codigo_origen_google(origen, textos):
+    if origen == "zh" and any(c in _TRADICIONAL for t in textos for c in t):
+        return "zh-TW"
+    return _CODIGO_GOOGLE.get(origen, origen)
 INDICE_ARGOS = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
 _FIN_FRASE = re.compile(r"(?<=[.!?。！？])\s*")
 
@@ -47,7 +55,7 @@ class Google:
         self.s.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     def _pedir(self, texto, origen, destino, espera):
-        params = {"client": "gtx", "sl": origen, "tl": _CODIGO_GOOGLE.get(destino, destino),
+        params = {"client": "gtx", "sl": codigo_origen_google(origen, [texto]), "tl": _CODIGO_GOOGLE.get(destino, destino),
                   "dt": "t", "ie": "UTF-8", "oe": "UTF-8"}
         if len(texto) < 1500:
             r = self.s.get(self.URL, params={**params, "q": texto}, timeout=espera)
@@ -56,6 +64,16 @@ class Google:
         r.raise_for_status()
         datos = r.json()
         return "".join(seg[0] for seg in (datos[0] or []) if seg and seg[0])
+
+    def con_contexto(self, texto, previo, origen, destino, espera=4):
+        """Traduce 'texto' junto con la frase anterior del mismo diálogo (para que acierte con
+        pronombres, género y tono) y devuelve solo la traducción de 'texto'. None si no se pudo
+        separar."""
+        limpio = [previo.replace("\n", " ").strip(), texto.replace("\n", " ").strip()]
+        salida = self._pedir("\n".join(limpio), origen, destino, espera).split("\n")
+        if len(salida) == 2 and salida[1].strip():
+            return salida[1].strip()
+        return None
 
     def lote(self, textos, origen, destino, espera=4):
         if not textos:
@@ -216,6 +234,20 @@ class Traductor:
         self.argos = ArgosLite(carpeta_argos)
         self.sin_red_hasta = 0
         self.ultimo_motor = ""
+
+    def con_contexto(self, texto, previo, origen, destino):
+        """Una frase con la anterior como contexto (solo en línea). None si no se pudo."""
+        modo = self.cfg().get("motor_traduccion", "auto")
+        if not self.google or modo == "sin_internet" or time.time() < self.sin_red_hasta:
+            return None
+        try:
+            res = self.google.con_contexto(texto, previo, origen, destino)
+            if res:
+                self.ultimo_motor = "en línea"
+            return res
+        except Exception as e:
+            log.warning("Traducción con contexto falló: %s", e)
+            return None
 
     def lote(self, textos, origen, destino):
         modo = self.cfg().get("motor_traduccion", "auto")

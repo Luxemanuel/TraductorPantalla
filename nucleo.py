@@ -371,11 +371,11 @@ class Memoria:
 # GLOSARIO
 # ============================================================================
 def leer_glosario():
-    datos = {"en": {}, "ja": {}}
+    datos = {"en": {}, "ja": {}, "zh": {}}
     try:
         with open(RUTA_GLOSARIO, encoding="utf-8") as f:
             crudo = json.load(f)
-        for idioma in ("en", "ja"):
+        for idioma in ("en", "ja", "zh"):
             datos[idioma] = dict(crudo.get(idioma, {}))
         if "_instrucciones" in crudo:
             datos["_instrucciones"] = crudo["_instrucciones"]
@@ -487,8 +487,21 @@ _PAL_EN = set("the of and to in is it you that for on with are this be at by not
               "your have an was can will all do my we they".split())
 
 
-def detectar_idioma(texto):
-    return "ja" if JP_RE.search(texto) else "en"
+_KANA_RE = re.compile(r"[\u3040-\u30ff\uff66-\uff9f]")
+
+
+def detectar_idioma(texto, japones_cerca=False):
+    """en / ja / zh. Ideogramas sin kana = chino, salvo que haya japonés alrededor."""
+    if not JP_RE.search(texto):
+        return "en"
+    if _KANA_RE.search(texto) or japones_cerca:
+        return "ja"
+    return "zh"
+
+
+def idioma_de(p):
+    """Idioma de un renglón o párrafo leído (los lectores antiguos solo marcan 'jp')."""
+    return p.get("idi") or ("ja" if p.get("jp") else "en")
 
 
 def parece_espanol(texto):
@@ -553,7 +566,7 @@ class Motor:
         nuevo = {}
         try:
             datos = leer_glosario()
-            for idioma in ("en", "ja"):
+            for idioma in ("en", "ja", "zh"):
                 for k, v in datos.get(idioma, {}).items():
                     nuevo[(idioma, self._norm(k, idioma))] = v
         except Exception as e:
@@ -570,8 +583,10 @@ class Motor:
         return re.sub(r"\s+", "", t).strip("。、！？!?「」")
 
     # ---------- traducción ----------
-    def traducir_lote(self, items, destino=None):
-        """items: [(texto, idioma_origen)] -> traducciones en el mismo orden (None si falló)."""
+    def traducir_lote(self, items, destino=None, contexto=None):
+        """items: [(texto, idioma_origen)] -> traducciones en el mismo orden (None si falló).
+        contexto: {idioma: frase anterior del diálogo}; las frases nuevas de ese idioma se
+        traducen junto con ella (en línea), lo demás como siempre."""
         cfg = self.cfg()
         destino = destino or cfg.get("idioma_destino", "es")
         usar_memoria = cfg.get("memoria", True) and self.memoria is not None
@@ -607,7 +622,16 @@ class Motor:
 
         def hacer(idioma, lista):
             try:
-                trads = self.traductor.lote([t for _, t, _ in lista], idioma, destino)
+                previo = (contexto or {}).get(idioma)
+                trads = [None] * len(lista)
+                if previo and hasattr(self.traductor, "con_contexto"):
+                    for k, (_, t, _) in enumerate(lista):
+                        if t.strip() != previo.strip():
+                            trads[k] = self.traductor.con_contexto(t, previo, idioma, destino)
+                faltan = [k for k, tr in enumerate(trads) if not tr]
+                if faltan:
+                    for k, tr in zip(faltan, self.traductor.lote([lista[k][1] for k in faltan], idioma, destino)):
+                        trads[k] = tr
                 for (i, _, clave), tr in zip(lista, trads):
                     res[i] = tr
                     self.cache[clave] = tr
@@ -639,15 +663,15 @@ class Motor:
         if self.memoria is not None:
             self.memoria.guardar(idioma, destino, [(norm, texto, traduccion)], manual=True)
 
-    def _vale(self, texto, es_jp, modo, omitir):
+    def _vale(self, texto, idioma, modo, omitir):
         if len(texto) < 2 or not LETRA_RE.search(texto):
             return False
-        if (modo == "en" and es_jp) or (modo == "ja" and not es_jp):
+        if modo in ("en", "ja", "zh") and idioma != modo:
             return False
         destino = self.cfg().get("idioma_destino", "es")
-        if ("ja" if es_jp else "en") == destino:
+        if idioma == destino:
             return False
-        if not es_jp and omitir and destino == "es" and parece_espanol(texto):
+        if idioma == "en" and omitir and destino == "es" and parece_espanol(texto):
             return False
         return True
 
@@ -660,11 +684,11 @@ class Motor:
             t0 = time.perf_counter()
             filas = quitar_furigana(self.lector.leer(imagen, modo, seguir))
             t1 = time.perf_counter()
-            pars = [p for p in agrupar_parrafos(filas)
-                    if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
+            pars = [p for p in quitar_nombres(agrupar_parrafos(filas))
+                    if self._vale(p["t"], idioma_de(p), modo, omitir_espanol)]
             if not seguir():
                 raise Cancelado()
-            trads = self.traducir_lote([(p["t"], "ja" if p["jp"] else "en") for p in pars]) if pars else []
+            trads = self.traducir_lote([(p["t"], idioma_de(p)) for p in pars]) if pars else []
             self.tiempos = (t1 - t0, time.perf_counter() - t1)
             bloques = []
             for p, tr in zip(pars, trads):
@@ -673,7 +697,7 @@ class Motor:
                     continue        # nada que traducir (números, nombres propios…)
                 bloques.append({"caja": (p["x0"], p["y0"], p["x1"], p["y1"]),
                                 "original": p["t"], "traduccion": tr,
-                                "idioma": "ja" if p["jp"] else "en"})
+                                "idioma": idioma_de(p)})
             return bloques
 
     def leer_parrafos(self, imagen, modo="auto", omitir_espanol=True, seguir=lambda: True):
@@ -685,19 +709,21 @@ class Motor:
             filas = quitar_furigana(self.lector.leer(imagen, modo, seguir))
             self.tiempos = (time.perf_counter() - t0, self.tiempos[1])
             return [{"caja": (p["x0"], p["y0"], p["x1"], p["y1"]), "t": p["t"],
-                     "idioma": "ja" if p["jp"] else "en", "filas": p["filas"]}
-                    for p in agrupar_parrafos(filas) if self._vale(p["t"], p["jp"], modo, omitir_espanol)]
+                     "idioma": idioma_de(p), "filas": p["filas"]}
+                    for p in quitar_nombres(agrupar_parrafos(filas))
+                    if self._vale(p["t"], idioma_de(p), modo, omitir_espanol)]
 
     # ---------- texto copiado ----------
     def traducir_texto(self, texto, modo="auto", omitir_espanol=True, seguir=lambda: True):
         """Traduce texto copiado (sin OCR). Cada línea detecta su idioma por separado."""
         texto = texto.replace("\r\n", "\n").replace("\r", "\n")[: self.MAX_COPIADO]
         lineas = []
+        japones = bool(_KANA_RE.search(texto))       # con kana en el texto, los ideogramas son japonés
         for linea in texto.split("\n"):
             linea = linea.strip()
-            es_jp = bool(JP_RE.search(linea))
-            if self._vale(linea, es_jp, modo, omitir_espanol):
-                lineas.append((linea, "ja" if es_jp else "en"))
+            idioma = detectar_idioma(linea, japones)
+            if self._vale(linea, idioma, modo, omitir_espanol):
+                lineas.append((linea, idioma))
         if not seguir():
             raise Cancelado()
         trads = self.traducir_lote(lineas) if lineas else []
@@ -790,7 +816,8 @@ def agrupar_parrafos(filas):
             u = p["ultima"]
             hu = u["y1"] - u["y0"]
             larga = (len(u["t"]) >= 10) if u["jp"] else (len(u["t"].split()) >= 4)
-            if (p["jp"] == f["jp"] and larga and not u["t"].rstrip().endswith(_FIN_FRASE)
+            if (p["jp"] == f["jp"] and p["idi"] == idioma_de(f) and larga
+                    and not u["t"].rstrip().endswith(_FIN_FRASE)
                     and abs(f["x0"] - u["x0"]) < 1.0 * max(h, hu)
                     and -0.2 * h <= f["y0"] - u["y1"] < 0.6 * max(h, hu)
                     and abs(h - hu) < 0.35 * max(h, hu)):
@@ -807,9 +834,40 @@ def agrupar_parrafos(filas):
                 break
         else:
             parrafos.append({"x0": cx0, "y0": cy0, "x1": cx1, "y1": cy1,
-                             "t": f["t"], "jp": f["jp"], "ultima": f,
+                             "t": f["t"], "jp": f["jp"], "idi": idioma_de(f), "ultima": f,
                              "filas": [(f["t"], (f["x0"], f["y0"], f["x1"], f["y1"]))]})
     return parrafos
+
+
+_PALABRAS_MENU = set("""start load save options option settings setting continue quit exit back yes no
+menu items item skills skill status equip config auto skip log history title return new game play close
+next prev previous ok cancel help extras gallery music credits about quick system main inventory map
+party magic attack defend run fight end""".split())
+_NOMBRE_RE = re.compile(r"^[A-Z][A-Za-z'’\-]{0,15}(?: [A-Z][A-Za-z'’\-]{0,15})?$")
+
+
+def es_nombre_personaje(p, otros):
+    """¿Es el cuadro con el nombre de quien habla? Una o dos palabras con mayúscula, justo encima
+    de un diálogo. Los nombres no se traducen ("Rose" no es "Rosa", "Hope" no es "Esperanza")."""
+    if idioma_de(p) != "en":
+        return False
+    t = p["t"].strip().strip("[]【】「」:：").strip()
+    if not _NOMBRE_RE.match(t) or any(w.lower() in _PALABRAS_MENU for w in t.split()):
+        return False
+    h = max(1.0, p["y1"] - p["y0"])
+    for q in otros:
+        if q is p:
+            continue
+        largo = len(q["t"]) / 3 if q["jp"] else len(q["t"].split())
+        if (largo >= 4 and -0.3 * h <= q["y0"] - p["y1"] <= 2.6 * h
+                and q["x0"] - 4 * h <= p["x0"] <= q["x1"] and p["x1"] <= q["x1"] + 4 * h):
+            return True
+    return False
+
+
+def quitar_nombres(parrafos):
+    """Los nombres de personaje (en alfabeto latino) se dejan como están en el juego."""
+    return [p for p in parrafos if not es_nombre_personaje(p, parrafos)]
 
 
 # ============================================================================
@@ -830,7 +888,7 @@ def cargar_fuente(nombre, tam, negrita=False):
         return ImageFont.load_default()
 
 
-_CJK = ["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc", "Hiragino Sans GB.ttc",
+_CJK = ["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc", "msyh.ttc", "simsun.ttc", "Hiragino Sans GB.ttc",
         "ヒラギノ角ゴシック W3.ttc", "NotoSansCJK-Regular.ttc", "NotoSansJP-Regular.otf"]
 
 

@@ -10,14 +10,25 @@ import asyncio
 import re
 import sys
 import threading
+import time
 
 from nucleo import JP_RE, ESP_ENTRE_JP, corregir_ingles, log
 
 ES_WINDOWS = sys.platform.startswith("win")
 
 # Comando para instalar los lectores (necesita permisos de administrador)
-COMANDO_INSTALAR = ('Add-WindowsCapability -Online -Name "Language.OCR~~~en-US~0.0.1.0"; '
-                    'Add-WindowsCapability -Online -Name "Language.OCR~~~ja-JP~0.0.1.0"')
+CAPACIDADES = {"en": "Language.OCR~~~en-US~0.0.1.0", "ja": "Language.OCR~~~ja-JP~0.0.1.0",
+               "zh": "Language.OCR~~~zh-CN~0.0.1.0"}
+COMANDO_INSTALAR = "; ".join(f'Add-WindowsCapability -Online -Name "{c}"' for c in CAPACIDADES.values())
+
+KANA_RE = re.compile(r"[\u3040-\u30ff\uff66-\uff9f]")
+CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]")
+
+
+def proporcion_kana(textos):
+    """Qué parte de los caracteres CJK son kana: el japonés los usa en casi toda frase; el chino nunca."""
+    cjk = sum(len(CJK_RE.findall(t)) for t in textos)
+    return sum(len(KANA_RE.findall(t)) for t in textos) / cjk if cjk else 0.0
 
 
 def crear_lector(avisar=print):
@@ -29,10 +40,12 @@ def crear_lector(avisar=print):
     return LectorEasyOCR(avisar)
 
 
-def instalar_lectores_windows():
+def instalar_lectores_windows(idiomas=None):
     """Abre una ventana de PowerShell como administrador que instala los lectores."""
     import ctypes
-    args = ('-NoProfile -ExecutionPolicy Bypass -Command "' + COMANDO_INSTALAR.replace('"', '\\"') +
+    comando = COMANDO_INSTALAR if not idiomas else "; ".join(
+        f'Add-WindowsCapability -Online -Name "{CAPACIDADES[i]}"' for i in idiomas)
+    args = ('-NoProfile -ExecutionPolicy Bypass -Command "' + comando.replace('"', '\\"') +
             '; Write-Host; Write-Host Listo. Reinicia el Traductor de Pantalla.; pause"')
     return ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", args, None, 1) > 32
 
@@ -77,6 +90,8 @@ class LectorWindows:
     nombre = "Windows"
 
     def __init__(self, avisar=print):
+        self.chino_visto = 0.0          # última vez que se vio texto chino
+        self.falta_chino = False        # se vio algo que parece chino y no hay lector chino
         self.hilo = _HiloWinRT()
         self.motores = self.hilo.ejecutar(self._crear())
         if not self.motores:
@@ -96,6 +111,12 @@ class LectorWindows:
             tag = next((t for t in etiquetas if t.lower().split("-")[0] == codigo), None)
             if tag:
                 motores[codigo] = OcrEngine.try_create_from_language(Language(tag))
+        # chino: el simplificado si está; si no, el tradicional
+        for pref in ("zh-hans", "zh-cn", "zh-sg", "zh-hant", "zh-tw", "zh-hk", "zh"):
+            tag = next((t for t in etiquetas if t.lower().startswith(pref)), None)
+            if tag:
+                motores["zh"] = OcrEngine.try_create_from_language(Language(tag))
+                break
         if "en" not in motores:
             # Sin lector de inglés: uno de alfabeto latino (p. ej. el español de Windows) lee el inglés
             latino = next((t for t in etiquetas if t.lower().split("-")[0] in
@@ -108,6 +129,10 @@ class LectorWindows:
     @property
     def tiene_japones(self):
         return "ja" in self.motores
+
+    @property
+    def tiene_chino(self):
+        return "zh" in self.motores
 
     async def _reconocer(self, img, codigos):
         from winrt.windows.graphics.imaging import SoftwareBitmap, BitmapPixelFormat
@@ -127,19 +152,48 @@ class LectorWindows:
             f = lim / max(img.size)
             img = img.resize((int(img.width * f), int(img.height * f)))
             escala *= f
-        codigos = [c for c in (("en",) if modo == "en" else ("ja",) if modo == "ja" else ("en", "ja"))
-                   if c in self.motores]
+        if modo in ("en", "ja", "zh"):
+            codigos = [modo]
+        else:
+            # el lector chino solo cuando hace falta (si hace poco se vio chino, desde el principio)
+            codigos = ["en", "ja"] + (["zh"] if time.time() - self.chino_visto < 30 else [])
+        codigos = [c for c in codigos if c in self.motores]
         if not codigos:
             return []
         res = self.hilo.ejecutar(self._reconocer(img, codigos))
         lineas = {c: self._lineas(r, escala, c) for c, r in res.items()}
-        jp = [l for l in lineas.get("ja", []) if l["jp"]]
+        if modo == "auto" and "zh" in self.motores and "zh" not in lineas:
+            cjk = [l["t"] for l in lineas.get("ja", []) if l["jp"]]
+            if cjk and proporcion_kana(cjk) < 0.08:          # ideogramas sin kana: ¿chino?
+                lineas["zh"] = self._lineas(self.hilo.ejecutar(self._reconocer(img, ["zh"]))["zh"], escala, "zh")
+        return self._combinar(lineas, modo)
+
+    def _combinar(self, lineas, modo):
+        ja = [l for l in lineas.get("ja", []) if l["jp"]]
+        zh = [l for l in lineas.get("zh", []) if l["jp"]]
         if modo == "ja":
-            return jp
-        latinas = [l for l in lineas.get("en", []) if not any(_solapa(l, j) for j in jp)]
+            return [dict(l, idi="ja") for l in ja]
+        if modo == "zh":
+            return [dict(l, idi="zh") for l in zh]
+        kana = proporcion_kana([l["t"] for l in ja])
+        if zh and kana < 0.08:
+            # pantalla en chino: las líneas del lector chino (y las japonesas con kana que no choquen)
+            self.chino_visto = time.time()
+            cjk = [dict(l, idi="zh") for l in zh]
+            cjk += [dict(j, idi="ja") for j in ja if proporcion_kana([j["t"]]) >= 0.15
+                    and not any(_solapa(j, z) for z in zh)]
+        elif ja and kana < 0.02 and "zh" not in self.motores and sum(len(l["t"]) for l in ja) >= 8:
+            # parece chino pero Windows no tiene el lector chino: se traduce como chino y se avisa
+            self.falta_chino = True
+            cjk = [dict(l, idi="zh") for l in ja]
+        else:
+            cjk = [dict(l, idi="ja") for l in ja]
+        if modo == "en":
+            cjk = []
+        latinas = [dict(l, idi="en") for l in lineas.get("en", []) if not any(_solapa(l, j) for j in cjk)]
         if "en" not in lineas:   # solo hay lector japonés: usar también sus líneas latinas
-            latinas = [l for l in lineas.get("ja", []) if not l["jp"]]
-        return jp + latinas
+            latinas = [dict(l, idi="en") for l in lineas.get("ja", []) if not l["jp"]]
+        return cjk + latinas
 
     @staticmethod
     def _lineas(resultado, escala, codigo):

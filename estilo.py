@@ -390,7 +390,10 @@ _WINDOWS = ["arial.ttf", "arialbd.ttf", "ariali.ttf", "segoeui.ttf", "segoeuib.t
             "gadugi.ttf", "ebrima.ttf", "malgun.ttf", "Candarab.ttf", "segoepr.ttf", "segoesc.ttf"]
 _WINDOWS_JA = {"YuGothR.ttc": "sans", "YuGothB.ttc": "sans_b", "meiryo.ttc": "sans", "meiryob.ttc": "sans_b",
                "msgothic.ttc": "sans", "BIZ-UDGothicR.ttc": "sans", "BIZ-UDGothicB.ttc": "sans_b",
-               "yumin.ttf": "serif", "yuminl.ttf": "serif", "msmincho.ttc": "serif", "BIZ-UDMinchoM.ttc": "serif"}
+               "yumin.ttf": "serif", "yuminl.ttf": "serif", "msmincho.ttc": "serif", "BIZ-UDMinchoM.ttc": "serif",
+               # chino (para reconocer el estilo del texto chino)
+               "msyh.ttc": "sans", "msyhbd.ttc": "sans_b", "Deng.ttf": "sans", "simhei.ttf": "sans_b",
+               "simsun.ttc": "serif"}
 # fuentes japonesas incluidas → categoría
 _INCLUIDAS_JA = {"NotoSansJP.ttf": "sans", "NotoSerifJP.ttf": "serif", "DotGothic16-Regular.ttf": "pixel",
                  "ZenMaruGothic-Medium.ttf": "redonda"}

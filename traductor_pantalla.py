@@ -17,7 +17,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageTk
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageTk
 
 import nucleo
 from nucleo import (ACCIONES, ACCIONES_MANTENER, ACCIONES_VIVO, ACCIONES_FIJO, TAM_INTERFAZ, Motor, Voz,
@@ -220,8 +220,9 @@ class App:
         idi = ttk.Frame(f)
         idi.pack(fill="x")
         self.v_idioma = tk.StringVar(r, value=self.cfg["idioma_origen"])
-        self._origenes = {"Detectar (inglés y japonés)": "auto", "Inglés": "en", "Japonés": "ja"}
-        self.cb_origen = ttk.Combobox(idi, state="readonly", width=24, values=list(self._origenes))
+        self._origenes = {"Detectar (inglés, japonés, chino)": "auto", "Inglés": "en", "Japonés": "ja",
+                          "Chino": "zh"}
+        self.cb_origen = ttk.Combobox(idi, state="readonly", width=27, values=list(self._origenes))
         self.cb_origen.pack(side="left")
         self.cb_origen.bind("<<ComboboxSelected>>",
                             lambda e: self.v_idioma.set(self._origenes[self.cb_origen.get()]))
@@ -318,11 +319,12 @@ class App:
 
     # ---------- idiomas ----------
     def _sincronizar_origen(self):
-        nombre = {v: k for k, v in self._origenes.items()}.get(self.v_idioma.get(), "Detectar (inglés y japonés)")
+        nombre = {v: k for k, v in self._origenes.items()}.get(self.v_idioma.get(), "Detectar (inglés, japonés, chino)")
         if self.cb_origen.get() != nombre:
             self.cb_origen.set(nombre)
         destino = self.cb_destino.get() if hasattr(self, "cb_destino") else "Español"
-        origen = {"auto": "Inglés · Japonés", "en": "Inglés", "ja": "Japonés"}[self.v_idioma.get()]
+        origen = {"auto": "Inglés · Japonés · Chino", "en": "Inglés", "ja": "Japonés",
+                  "zh": "Chino"}.get(self.v_idioma.get(), "Inglés · Japonés · Chino")
         self.lbl_sub.configure(text=f"{origen}  →  {destino}")
 
     def _origen_cambiado(self):
@@ -762,11 +764,30 @@ class App:
             return True
         return False
 
+    def _ofrecer_lector_chino(self):
+        """Se vio texto que parece chino y Windows no tiene el lector chino: ofrecer instalarlo (una vez)."""
+        lec = getattr(self.motor, "lector", None)
+        if not getattr(lec, "falta_chino", False) or getattr(self, "_chino_ofrecido", False):
+            return
+        self._chino_ofrecido = True
+        msg = ("Este texto parece chino, y a Windows le falta su lector de chino (sin él, los caracteres "
+               "se leen mal). ¿Instalarlo ahora? Es gratis, pide permiso de administrador y tarda unos "
+               "minutos; después, cierra y vuelve a abrir el traductor.")
+        self.avisar("Parece chino: falta el lector chino de Windows (Ajustes → Traducción → «Instalar lectores»).")
+        if getattr(self, "_sin_preguntas", False):
+            return
+        self.mostrar_principal()
+        if messagebox.askyesno("Lector de chino", msg, parent=self.root):
+            import lector
+            if lector.instalar_lectores_windows(("zh",)):
+                self.estado("Instalando el lector chino… Cuando termine, reinicia el traductor.")
+
     def _resultado_vivo(self, sesion, bloques, nuevos, duracion, piezas=None):
         if sesion is not self.vivo:
             sesion.procesando = False
             return
         nuevos = sesion.resultado(bloques, nuevos, duracion, piezas)
+        self._ofrecer_lector_chino()
         if sesion.pintor is not None and sesion.pintor.cambios:
             self._guardar_letras(sesion)
         if bloques:
@@ -784,8 +805,9 @@ class App:
             que += f" de {sesion.titulo[:30]}"
         detalle = self._resumen(bloques) if bloques else "sin texto para traducir"
         leer, trad = self.motor.tiempos
+        exacto = " · texto exacto del guion (Ren'Py)" if sesion.guion is not None else ""
         self.estado(f"● EN VIVO ({que}): {detalle}\nlectura {leer:.2f} s + traducción {trad:.2f} s · "
-                    f"se actualiza sola.")
+                    f"se actualiza sola{exacto}.")
         self._mostrar_motor()
 
     # ---------- subtítulos de voz ----------
@@ -1286,12 +1308,13 @@ class App:
 
     @staticmethod
     def _resumen(bloques):
-        en = sum(b["idioma"] == "en" for b in bloques)
-        ja = len(bloques) - en
-        partes = [f"{n} en {nombre}" for n, nombre in ((en, "inglés"), (ja, "japonés")) if n]
+        cuenta = {i: sum(b["idioma"] == i for b in bloques) for i in ("en", "ja", "zh")}
+        partes = [f"{cuenta[i]} en {nombre}" for i, nombre in (("en", "inglés"), ("ja", "japonés"), ("zh", "chino"))
+                  if cuenta[i]]
         return f"{len(bloques)} frase(s) traducidas (" + ", ".join(partes) + ")"
 
     def _mostrar_resultado(self, trabajo, img, mon, bloques, caja, segundos):
+        self._ofrecer_lector_chino()
         if trabajo != self.trabajo:
             return                    # se pulsó Detener: se descarta
         self.ocupado = False
@@ -1485,6 +1508,10 @@ def autoprueba():
         if ok and envivo.ES_WINDOWS:
             ok = autoprueba_furigana(m, lineas)
         if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_chino(m, lineas)
+        if ok:
+            ok = autoprueba_contexto_nombres_guion(m, lineas)
+        if ok and envivo.ES_WINDOWS:
             ok = autoprueba_instalador(lineas)
         lineas.append("RESULTADO: " + ("OK" if ok else "FALLO"))
     except Exception:
@@ -1541,8 +1568,8 @@ def autoprueba_anclado(m, lineas):
     lineas.append("--- Prueba ANCLADO A UN PROGRAMA ---")
     llamadas = []
     original = m.traducir_lote
-    m.traducir_lote = lambda items, destino=None: (llamadas.append([t for t, _ in items]),
-                                                   original(items, destino))[1]
+    m.traducir_lote = lambda items, destino=None, contexto=None: (llamadas.append([t for t, _ in items]),
+                                                                  original(items, destino, contexto))[1]
     app = _app_de_prueba(m)
     app.cfg["modo_vista"] = "superpuesto"
     r = app.root
@@ -1852,6 +1879,242 @@ def _ventanas_encima(rect):
     return vistas
 
 
+FRASES_CHINO = ("你喜欢童话故事吗？喜欢的话，请务必", "让我读给你听。我也非常、非常喜欢。")
+
+
+def _escena_chino():
+    """Como un juego en chino: globo claro semitransparente con texto gris oscuro."""
+    W, H = 900, 300
+    import numpy as np
+    yy, xx = np.mgrid[0:H, 0:W]
+    fondo = np.dstack([235 - yy * 0.1, 205 + xx * 0.03, 215 + yy * 0.05]).clip(0, 255).astype("uint8")
+    img = Image.fromarray(fondo, "RGB").convert("RGBA")
+    d = ImageDraw.Draw(img)
+    d.ellipse((520, -80, 860, 260), fill=(248, 226, 160, 255))            # "pelo" del personaje
+    globo = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(globo).rounded_rectangle((40, 150, 860, 285), radius=18, fill=(255, 255, 255, 226))
+    img.alpha_composite(globo)
+    f = None
+    for nombre in ("msyh.ttc", "Deng.ttf", "simhei.ttf", "simsun.ttc", "NotoSansCJK-Regular.ttc"):
+        try:
+            f = ImageFont.truetype(nombre, 30)
+            break
+        except Exception:
+            continue
+    if f is None:
+        return None
+    for i, t in enumerate(FRASES_CHINO):
+        d.text((76, 170 + i * 48), t, font=f, fill=(62, 62, 66))
+    return img.convert("RGB")
+
+
+def _vivo_natural(m, lineas, escena, titulo, archivo):
+    """Muestra 'escena' como un juego, lo traduce en vivo (estilo natural) y guarda la captura.
+    Devuelve (todo bien, textos traducidos)."""
+    app = _app_de_prueba(m)
+    r = app.root
+    r.withdraw()
+
+    def bombear(segundos, hasta=lambda: False):
+        fin = time.time() + segundos
+        while time.time() < fin:
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.03)
+        return hasta()
+    juego = tk.Toplevel(r)
+    juego.title(titulo)
+    juego.geometry(f"{escena.width}x{escena.height}+120+140")
+    juego.attributes("-topmost", True)
+    foto = ImageTk.PhotoImage(escena, master=juego)
+    tk.Label(juego, image=foto, bd=0, highlightthickness=0).pack()
+    juego.foto = foto
+    bombear(0.8)
+    juego.lift()
+    juego.focus_force()
+    bombear(0.6)
+    hw = envivo.hwnd_de(juego)
+    rect = envivo.rect_cliente(hw)
+    _activar_con_clic(hw, rect, bombear)
+    app.iniciar_vivo(rect, None, ventana=hw)
+    listo = bombear(40, lambda: app.vivo is not None and app.vivo.natural is not None
+                    and len(app.vivo.natural.piezas) >= 1
+                    and all(p.alfa >= 255 for p in app.vivo.natural.piezas.values()))
+    textos = [b["traduccion"] for b in app.vivo.bloques] if app.vivo else []
+    try:
+        import mss
+        if app.vivo is not None and app.vivo.natural is not None:
+            app.vivo.natural.permitir_captura(True)
+        bombear(0.4)
+        with mss.mss() as sct:
+            sh = sct.grab(rect)
+        if app.vivo is not None and app.vivo.natural is not None:
+            app.vivo.natural.permitir_captura(False)
+        Image.frombytes("RGB", sh.size, sh.bgra, "raw", "BGRX").save(
+            os.path.join(nucleo.BASE, "capturas_prueba", archivo))
+    except Exception as e:
+        lineas.append(f"  captura: no se pudo ({e})")
+    if not listo:
+        lineas.append(f"  estado: {app.lbl_estado.cget('text')!r}")
+    app.detener()
+    bombear(0.4)
+    for w in r.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    r.withdraw()
+    return listo, textos
+
+
+def autoprueba_chino(m, lineas):
+    """El texto chino (como el de un juego) se lee como chino y se traduce."""
+    lineas.append("--- Prueba CHINO ---")
+    if not getattr(m.lector, "tiene_chino", False):
+        lineas.append("Sin lector chino en Windows: prueba omitida")
+        return True
+    escena = _escena_chino()
+    if escena is None:
+        lineas.append("Sin letra china: prueba omitida")
+        return True
+    import difflib
+    pars = m.leer_parrafos(escena, "auto", True)
+    leido = "".join(p["t"] for p in pars if p["idioma"] == "zh")
+    parecido = difflib.SequenceMatcher(None, leido, "".join(FRASES_CHINO)).ratio()
+    ok = parecido >= 0.85 and all(p["idioma"] == "zh" for p in pars) and len(pars) == 1
+    lineas.append(f"Leído como chino: {'OK' if ok else 'FALLO'} · parecido {parecido:.2f} · "
+                  f"{[(p['idioma'], p['t']) for p in pars]}")
+    bloques = m.procesar(escena, "auto", True)
+    trad = " ".join(b["traduccion"] for b in bloques).lower()
+    ok_t = "cuento" in trad or "hadas" in trad
+    lineas.append(f"Traducido del chino: {'OK' if ok_t else 'FALLO'} · {trad}")
+    # el japonés sigue siendo japonés
+    jp = _escena_furigana()
+    if jp is not None and m.lector.tiene_japones:
+        pj = m.leer_parrafos(jp, "auto", True)
+        ok_j = bool(pj) and all(p["idioma"] == "ja" for p in pj)
+        lineas.append(f"El japonés sigue siendo japonés: {'OK' if ok_j else 'FALLO'} · {[p['idioma'] for p in pj]}")
+        ok = ok and ok_j
+    listo, textos = _vivo_natural(m, lineas, escena, "Juego en chino de prueba", "9_chino.png")
+    lineas.append(f"Chino en el estilo natural: {'OK' if listo else 'FALLO'} · {textos}")
+    return ok and ok_t and listo
+
+
+def _rpyc_de_prueba(frases):
+    """Un .rpyc con el mismo formato que los de Ren'Py (cabecera RPC2, pickle comprimido de nodos
+    renpy.ast.Say), creado aquí con clases falsas solo para la prueba."""
+    import pickle
+    import struct
+    import types
+    import zlib
+    falso = types.ModuleType("renpy.ast")
+
+    class Say:
+        def __init__(self, who, what):
+            self.who, self.what = who, what
+
+        def __getstate__(self):
+            return (None, {"who": self.who, "what": self.what, "filename": "game/script.rpy"})
+    Say.__module__, Say.__qualname__ = "renpy.ast", "Say"
+    falso.Say = Say
+    raiz = types.ModuleType("renpy")
+    raiz.ast = falso
+    viejos = {k: sys.modules.get(k) for k in ("renpy", "renpy.ast")}
+    sys.modules["renpy"], sys.modules["renpy.ast"] = raiz, falso
+    try:
+        blob = zlib.compress(pickle.dumps(({"version": 5003000}, [Say("e", f) for f in frases]), protocol=2))
+    finally:
+        for k, v in viejos.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+    return b"RENPY RPC2" + struct.pack("III", 1, 34, len(blob)) + struct.pack("III", 0, 0, 0) + blob
+
+
+def _rpa_de_prueba(ruta, archivos):
+    """Un archive.rpa (RPA-3.0) con esos archivos {nombre: bytes}."""
+    import pickle
+    import zlib
+    clave = 0x42424242
+    with open(ruta, "wb") as f:
+        f.write(b"RPA-3.0 %016x %08x\n" % (0, clave))
+        indice = {}
+        for nombre, datos in archivos.items():
+            pos = f.tell()
+            f.write(datos)
+            indice[nombre] = [(pos ^ clave, len(datos) ^ clave, b"")]
+        pos_indice = f.tell()
+        f.write(zlib.compress(pickle.dumps(indice, protocol=2)))
+        f.seek(0)
+        f.write(b"RPA-3.0 %016x %08x\n" % (pos_indice, clave))
+
+
+def autoprueba_contexto_nombres_guion(m, lineas):
+    """Traducción con contexto, nombres de personaje y texto exacto de Ren'Py."""
+    import tempfile
+    import guion
+    lineas.append("--- Prueba CONTEXTO, NOMBRES y REN'PY ---")
+    ok = True
+    # contexto: la frase nueva sale sola (sin la anterior pegada)
+    try:
+        sola = m.traductor.lote(["とても有名です。"], "ja", "es")[0]
+        con = m.traductor.con_contexto("とても有名です。", "彼女は医者です。", "ja", "es")
+        ok_c = bool(con) and "médic" not in con.lower() and "doctor" not in con.lower()
+        lineas.append(f"Contexto: {'OK' if ok_c else 'FALLO'} · sin contexto «{sola}» · con contexto «{con}»")
+        ok = ok and ok_c
+    except Exception as e:
+        lineas.append(f"Contexto: sin internet, no se pudo probar ({e})")
+    # nombres: el cuadro del nombre no se traduce, el diálogo sí
+    if envivo.ES_WINDOWS:
+        W, H = 900, 260
+        img = Image.new("RGB", (W, H), (30, 28, 44))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((40, 60, 860, 240), radius=12, fill=(14, 12, 24))
+        d.rounded_rectangle((40, 20, 190, 62), radius=8, fill=(90, 30, 50))
+        f = nucleo.cargar_fuente("Arial", 28)
+        d.text((62, 26), "Rose", font=f, fill=(250, 240, 230))
+        d.text((70, 110), "I never thought I would see this place again.", font=f, fill=(240, 240, 240))
+        pars = m.leer_parrafos(img, "auto", True)
+        textos = [p["t"] for p in pars]
+        ok_n = not any(t.strip() == "Rose" for t in textos) and any("place" in t for t in textos)
+        lineas.append(f"Nombre de personaje sin traducir: {'OK' if ok_n else 'FALLO'} · {textos}")
+        ok = ok and ok_n
+    # Ren'Py: un juego falso con su guion dentro de archive.rpa (.rpyc) y en un .rpy suelto
+    carpeta = tempfile.mkdtemp()
+    juego = os.path.join(carpeta, "game")
+    os.makedirs(juego)
+    os.makedirs(os.path.join(carpeta, "renpy"))
+    frases = ["It's only when I hear the sounds of shuffling feet that I realize the lecture's over.",
+              "魔法の剣を手に入れた。もう怖いものはない。", "你喜欢童话故事吗？喜欢的话，请务必让我读给你听。"]
+    _rpa_de_prueba(os.path.join(juego, "archive.rpa"), {"script.rpyc": _rpyc_de_prueba(frases)})
+    with open(os.path.join(juego, "extra.rpy"), "w", encoding="utf-8") as fh:
+        fh.write('label extra:\n    e "The lanterns still {i}shine{/i} the same way."\n')
+    g = guion.cargar_guion(guion.carpeta_juego(os.path.join(carpeta, "Juego.exe")))
+    pruebas = [("lt's only when l hear the sounds of shuffling feet that I realize the lecture's over.", frases[0]),
+               ("魔法の剣を手に人れた。もう怖いものはない。", frases[1]),
+               ("The lanterns still shine the same way.", "The lanterns still shine the same way."),
+               ("It's only when I hear the", None)]
+    malas = [(o, g.exacta(o)) for o, e in pruebas if g.exacta(o) != e]
+    ok_g = len(g) == 4 and not malas
+    lineas.append(f"Ren'Py, frase exacta del guion: {'OK' if ok_g else 'FALLO'} · {len(g)} frases · fallos {malas}")
+    # y la sesión en vivo carga el guion sola cuando el programa es un juego Ren'Py
+    if envivo.ES_WINDOWS:
+        app = _app_de_prueba(m)
+        app.root.withdraw()
+        s = envivo.SesionEnVivo(app, {"left": 0, "top": 0, "width": 400, "height": 300}, None,
+                                capturar=lambda: Image.new("RGB", (400, 300)),
+                                ruta_exe=os.path.join(carpeta, "Juego.exe"))
+        fin = time.time() + 10
+        while s.guion is None and time.time() < fin:
+            app.root.update()
+            time.sleep(0.05)
+        ok_s = s.guion is not None and len(s.guion) == 4
+        lineas.append(f"La sesión en vivo usa el guion del juego: {'OK' if ok_s else 'FALLO'}")
+        s.detener()
+        ok_g = ok_g and ok_s
+    return ok and ok_g
+
+
 _APPS_PRUEBA = []
 
 
@@ -1877,6 +2140,7 @@ def _app_de_prueba(m):
         except tk.TclError:
             pass
     app = App(motor=m)
+    app._sin_preguntas = True
     _APPS_PRUEBA.append(app)
     return app
 

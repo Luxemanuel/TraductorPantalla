@@ -57,7 +57,7 @@ SI NO VES LA TRADUCCIÓN
 PRIMERA VEZ: LECTOR JAPONÉS
   El lector de texto es el de Windows. Si tu Windows no tiene el japonés,
   el programa te avisa: Ajustes > Traducción >
-  "Instalar lectores de inglés y japonés" (gratis; pide permiso de
+  "Instalar lectores de inglés, japonés y chino" (gratis; pide permiso de
   administrador). Luego cierra y abre el traductor.
 
 IDIOMA DE DESTINO
@@ -77,7 +77,11 @@ CONSEJOS
   · Si sabes el idioma, márcalo (Inglés o Japonés) en vez de "Detectar".
   · Al abrir tarda unos segundos en preparar todo.
 
-Inglés y japonés mezclados se traducen a la vez con "Detectar".
+Inglés, japonés y chino (simplificado o tradicional) se reconocen solos con
+"Detectar". Si un juego está en chino y a Windows le falta su lector, el
+programa te ofrece instalarlo. En juegos hechos con Ren'Py el programa lee
+su guion y usa la frase exacta (sin errores de lectura). Los nombres de
+personaje (Rose, Hope…) no se traducen.
 En la ventana principal tienes Historial, Mi glosario, Ajustes
 (colores, alto contraste, letra, atajos, voz…) y Ayuda (F1).
 
