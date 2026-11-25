@@ -788,6 +788,9 @@ class App:
             return
         nuevos = sesion.resultado(bloques, nuevos, duracion, piezas)
         self._ofrecer_lector_chino()
+        if not getattr(self, "_chino_visto", False) and any(b["idioma"] == "zh" for b in bloques):
+            self._chino_visto = True                      # el respaldo sin internet también para el chino
+            self._preparar_sin_internet(self.cfg["idioma_destino"], ("zh",))
         if sesion.pintor is not None and sesion.pintor.cambios:
             self._guardar_letras(sesion)
         if bloques:
@@ -987,13 +990,17 @@ class App:
         if self.listo:
             self._preparar_sin_internet(codigo)
 
-    def _preparar_sin_internet(self, codigo):
+    def _preparar_sin_internet(self, codigo, origenes=None):
         """Diccionarios sin internet (el respaldo) para traducir a 'codigo': si faltan, se
-        descargan solos en segundo plano. Así el paquete no los lleva y pesa mucho menos."""
+        descargan solos en segundo plano. Así el paquete no los lleva y pesa mucho menos.
+        El de chino solo cuando ya se vio un juego en chino."""
         if self.motor.traductor is None:
             return
         argos = self.motor.traductor.argos
-        if argos.disponible("en", codigo) and argos.disponible("ja", codigo):
+        if origenes is None:
+            origenes = ("en", "ja") + (("zh",) if getattr(self, "_chino_visto", False) else ())
+        origenes = tuple(o for o in origenes if o != codigo)
+        if all(argos.disponible(o, codigo) for o in origenes):
             return
         import traduccion
         nombre = traduccion.IDIOMAS_DESTINO.get(codigo, codigo)
@@ -1001,11 +1008,11 @@ class App:
         def preparar():
             with self._lock_diccionarios:          # uno a la vez (no descargar dos veces lo mismo)
                 try:
-                    if argos.disponible("en", codigo) and argos.disponible("ja", codigo):
+                    if all(argos.disponible(o, codigo) for o in origenes):
                         return
                     self.cola.put(("estado", f"Descargando el diccionario sin internet ({nombre}). "
                                              f"Solo la primera vez; puedes usar el traductor mientras."))
-                    for origen in ("en", "ja"):
+                    for origen in origenes:
                         argos.descargar(origen, codigo, lambda m: None)
                     self.cola.put(("estado", f"Listo también sin internet: {nombre}."))
                 except Exception:
