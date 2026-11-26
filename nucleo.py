@@ -38,6 +38,9 @@ RUTA_PERFILES = os.path.join(BASE, "perfiles.json")
 log = logging.getLogger("traductor")
 
 
+SIGLA_RE = re.compile(r"^(?=.*[A-Z])[A-Z0-9+★☆]{1,5}$")
+
+
 class _RegistroLimitado(logging.FileHandler):
     """registro.txt que nunca crece sin límite: al pasar de 2 MB pasa a registro_anterior.txt."""
     LIMITE = 2_000_000
@@ -665,6 +668,8 @@ class Motor:
 
     def _vale(self, texto, idioma, modo, omitir):
         if len(texto) < 2 or not LETRA_RE.search(texto):
+            return False
+        if SIGLA_RE.match(texto.strip()):          # SSR, HP, ATK, LV…: se dejan como están
             return False
         if modo in ("en", "ja", "zh") and idioma != modo:
             return False

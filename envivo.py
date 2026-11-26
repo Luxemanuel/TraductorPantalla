@@ -953,7 +953,8 @@ class SesionEnVivo:
                 img = self._capturar()
                 # 1) ¿Siguen igual los trazos de lo ya traducido? Si no, se quita al momento.
                 cambiadas = self._revisar_fijas(img)
-                if not self.procesando:
+                capturable = self.natural is not None and getattr(self.natural, "capturable", False)
+                if not self.procesando and not capturable:   # con la traducción en la captura no se lee
                     peq = miniatura(img)
                     # 2) Leer solo si algo cambió FUERA de lo ya traducido (texto nuevo) o si
                     #    algo se fue. Lo traducido y quieto no se vuelve a leer: no parpadea.

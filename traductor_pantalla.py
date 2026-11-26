@@ -1994,6 +1994,7 @@ def autoprueba_estabilidad(m, lineas):
         claves = set(v.natural.piezas)
         lect = v.lecturas
         cambios, quitadas = 0, 0
+        detalle = []
         u32 = ctypes.windll.user32
         fin = time.time() + 8
         k = 0
@@ -2005,10 +2006,11 @@ def autoprueba_estabilidad(m, lineas):
             if ahora != claves:
                 cambios += 1
                 quitadas += len(claves - ahora)
+                detalle.append(f"{time.time() - (fin - 8):.1f}s -{sorted(claves - ahora)} +{sorted(ahora - claves)}")
                 claves = ahora
         ok_e = cambios == 0
         lineas.append(f"Quieto 8 s con el cursor encima: {'OK' if ok_e else 'FALLO'} · cambios {cambios}, "
-                      f"traducciones quitadas {quitadas}, lecturas extra {v.lecturas - lect}")
+                      f"traducciones quitadas {quitadas}, lecturas extra {v.lecturas - lect} {detalle}")
         # el texto se va: su traducción también, ya
         vacia = ImageTk.PhotoImage(_escena_gacha(con_texto=False), master=juego)
         juego.foto2 = vacia

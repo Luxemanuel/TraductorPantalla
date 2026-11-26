@@ -1208,6 +1208,9 @@ def escribir(grupo, trad, fuente, arr, modo="natural", respaldo=None):
     otras = {tuple(o) for p in grupo for o in p.get("otras", ()) if tuple(o) not in propias}
     medidas = [medir_espacio(arr, p["est"], otras) for p in grupo]
     espacio = (min(m[0] for m in medidas), min(m[1] for m in medidas), medidas[-1][2])
+    if paso and paso > alto_fila:
+        # un renglón de más ocupa el paso entero entre renglones, no solo el alto de la letra
+        espacio = (espacio[0], espacio[1], max(0, int(espacio[2] - (paso - alto_fila))))
     if est["fondo"] == "textura" and centrado:
         # subtítulos o títulos sobre imagen: pueden crecer un poco y bajar a una 2ª línea
         espacio = (int((x1 - x0) * 0.15), int((x1 - x0) * 0.15), int(alto_fila * 1.3))
@@ -1225,8 +1228,13 @@ def escribir(grupo, trad, fuente, arr, modo="natural", respaldo=None):
     n_o, n_n = len(filas), len(lineas)
     if any(p.get("jp") for p in grupo):
         # los kanji llenan todo el alto: centrar la banda de mayúsculas en el centro del original
-        centro = (filas[0][0] + filas[-1][1]) / 2
-        y_ini = centro - (n_n - 1) * alto_linea / 2 - (top_ref + bot_ref) / 2
+        # Si salen más renglones que en el original, crece hacia abajo (como un texto normal),
+        # salvo que esté centrado.
+        if n_n > n_o and not centrado:
+            y_ini = sum(filas[0]) / 2 - (top_ref + bot_ref) / 2
+        else:
+            centro = (filas[0][0] + filas[-1][1]) / 2
+            y_ini = centro - (n_n - 1) * alto_linea / 2 - (top_ref + bot_ref) / 2
     else:
         y_ini = y0 - top_ref
         if centrado and n_n != n_o:
