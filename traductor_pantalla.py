@@ -2078,9 +2078,9 @@ def autoprueba_contexto_nombres_guion(m, lineas):
         d = ImageDraw.Draw(img)
         d.rounded_rectangle((40, 60, 860, 240), radius=12, fill=(14, 12, 24))
         d.rounded_rectangle((40, 20, 190, 62), radius=8, fill=(90, 30, 50))
-        f = nucleo.cargar_fuente("Arial", 28)
-        d.text((62, 26), "Rose", font=f, fill=(250, 240, 230))
-        d.text((70, 110), "I never thought I would see this place again.", font=f, fill=(240, 240, 240))
+        f = nucleo.cargar_fuente("Segoe UI", 30)
+        d.text((62, 24), "Rose", font=f, fill=(250, 240, 230))
+        d.text((70, 84), "I never thought I would see this place again.", font=f, fill=(240, 240, 240))
         pars = m.leer_parrafos(img, "auto", True)
         textos = [p["t"] for p in pars]
         ok_n = not any(t.strip() == "Rose" for t in textos) and any("place" in t for t in textos)

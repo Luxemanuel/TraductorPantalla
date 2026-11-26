@@ -33,14 +33,13 @@ jobs:
 
       - name: Instalar lector japonés de Windows y fuentes japonesas (para las pruebas)
         continue-on-error: true
-        timeout-minutes: 22
+        timeout-minutes: 26
         shell: pwsh
         run: |
           Add-WindowsCapability -Online -Name "Language.OCR~~~ja-JP~0.0.1.0" | Out-Null
+          Add-WindowsCapability -Online -Name "Language.OCR~~~zh-CN~0.0.1.0" | Out-Null
           Add-WindowsCapability -Online -Name "Language.OCR~~~en-US~0.0.1.0" | Out-Null
           Add-WindowsCapability -Online -Name "Language.Fonts.Jpan~~~und-JPAN~0.0.1.0" | Out-Null
-          Add-WindowsCapability -Online -Name "Language.OCR~~~zh-CN~0.0.1.0" | Out-Null
-          Add-WindowsCapability -Online -Name "Language.Fonts.Hans~~~und-HANS~0.0.1.0" | Out-Null
           Get-WindowsCapability -Online | Where-Object Name -like "Language.OCR*" | Format-Table Name, State
 
       - name: Crear icono

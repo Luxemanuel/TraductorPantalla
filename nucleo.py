@@ -842,7 +842,7 @@ def agrupar_parrafos(filas):
 _PALABRAS_MENU = set("""start load save options option settings setting continue quit exit back yes no
 menu items item skills skill status equip config auto skip log history title return new game play close
 next prev previous ok cancel help extras gallery music credits about quick system main inventory map
-party magic attack defend run fight end""".split())
+party magic attack defend run fight end chapter prologue epilogue part act day episode route""".split())
 _NOMBRE_RE = re.compile(r"^[A-Z][A-Za-z'’\-]{0,15}(?: [A-Z][A-Za-z'’\-]{0,15})?$")
 
 
@@ -859,7 +859,7 @@ def es_nombre_personaje(p, otros):
         if q is p:
             continue
         largo = len(q["t"]) / 3 if q["jp"] else len(q["t"].split())
-        if (largo >= 4 and -0.3 * h <= q["y0"] - p["y1"] <= 2.6 * h
+        if (largo >= 4 and -0.3 * h <= q["y0"] - p["y1"] <= 3.5 * h
                 and q["x0"] - 4 * h <= p["x0"] <= q["x1"] and p["x1"] <= q["x1"] + 4 * h):
             return True
     return False

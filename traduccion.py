@@ -66,14 +66,31 @@ class Google:
         return "".join(seg[0] for seg in (datos[0] or []) if seg and seg[0])
 
     def con_contexto(self, texto, previo, origen, destino, espera=4):
-        """Traduce 'texto' junto con la frase anterior del mismo diálogo (para que acierte con
-        pronombres, género y tono) y devuelve solo la traducción de 'texto'. None si no se pudo
-        separar."""
-        limpio = [previo.replace("\n", " ").strip(), texto.replace("\n", " ").strip()]
-        salida = self._pedir("\n".join(limpio), origen, destino, espera).split("\n")
-        if len(salida) == 2 and salida[1].strip():
-            return salida[1].strip()
-        return None
+        """Traduce 'texto' como continuación de la frase anterior del mismo diálogo (en un solo
+        párrafo, para que acierte con pronombres, género y tono) y devuelve solo la parte de
+        'texto'. Google devuelve un trozo por cada frase original, así se sabe cuál es cuál.
+        None si no se pudo separar limpio."""
+        previo = previo.replace("\n", " ").strip()
+        texto = texto.replace("\n", " ").strip()
+        if not previo.endswith(tuple(".!?。！？…」』\"'")):
+            return None                          # sin final de frase, no se sabe dónde partir
+        union = "" if origen in ("ja", "zh") else " "
+        params = {"client": "gtx", "sl": codigo_origen_google(origen, [texto]),
+                  "tl": _CODIGO_GOOGLE.get(destino, destino), "dt": "t", "ie": "UTF-8", "oe": "UTF-8",
+                  "q": previo + union + texto}
+        r = self.s.get(self.URL, params=params, timeout=espera)
+        r.raise_for_status()
+        trozos = [(seg[0] or "", seg[1] or "") for seg in (r.json()[0] or []) if seg and len(seg) > 1]
+        leido, salida = 0, []
+        limite = len(re.sub(r"\s+", "", previo))
+        for trad, orig in trozos:
+            if leido >= limite:
+                salida.append(trad)
+            elif leido + len(re.sub(r"\s+", "", orig)) > limite:
+                return None                      # una frase quedó partida entre las dos
+            leido += len(re.sub(r"\s+", "", orig))
+        res = "".join(salida).strip()
+        return res or None
 
     def lote(self, textos, origen, destino, espera=4):
         if not textos:
