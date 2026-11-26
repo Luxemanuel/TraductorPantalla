@@ -165,6 +165,7 @@ def otro_texto(leido, conocido):
 UMBRAL_HUELLA = 0.30
 UMBRAL_SEGURO = 0.6
 UMBRAL_LOCAL = 0.5          # cambio en un trozo del ancho de una letra (ver cambio_local)
+QUIETA_SEG = 0.25           # una línea leída que no cambia en este tiempo ya no se está escribiendo
 UMBRAL_LOCAL_SEGURO = 0.8   # medido: otra palabra ~0.96, otro número ~0.85; fondo animado <= ~0.52
 
 
@@ -529,7 +530,7 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
@@ -544,6 +545,8 @@ class Linea:
         self.candidato, self.conf_cand = None, 0
         self.nueva = True
         self.huella = None          # trazos de su sitio cuando se confirmó (ver huella())
+        self.huella_lect = None     # trazos cuando se leyó sin confirmar, y cuándo: si siguen
+        self.t_lect = 0.0           # quietos un momento, se confirma sin volver a leer
 
 
 def _parecido(a, b):
@@ -835,6 +838,7 @@ class SesionEnVivo:
         self._verificando = set()             # líneas que se están comprobando leyéndolas
         self._por_quitar = []                 # comprobadas: era otro texto
         self._releer = []                     # sitios de traducciones quitadas: leerlos ya
+        self.eventos = []
         self.verificaciones = 0
         self._pista = None                    # "ja"/"zh": idioma del juego, visto en una lectura completa
         self._otras = []                      # cajas del texto a la vista
@@ -896,7 +900,7 @@ class SesionEnVivo:
                 log_limitado("traducir", "Traduciendo en segundo plano")
                 trads = [None] * len(lote)
             for (_, texto, idioma), tr in zip(lote, trads):
-                if tr and (len(texto) >= 8 if idioma in ("ja", "zh") else len(texto.split()) >= 4):
+                if tr and nucleo.es_frase(texto, idioma):
                     self._contexto[idioma] = texto
             self.app.motor.tiempos = (self.app.motor.tiempos[0], time.perf_counter() - t0)
             with self.cerrojo:
@@ -908,6 +912,7 @@ class SesionEnVivo:
                         validas.append((l, tr))
                 self._nuevos += self.seguidor.asignar([l for l, _ in validas], [tr for _, tr in validas])
             self.repintar = True
+            self._evento("traducida", [l for l, _ in validas])
 
     def _poner_guion(self, g):
         self.guion = g
@@ -1077,6 +1082,7 @@ class SesionEnVivo:
                     cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
                 elif l.id not in self._verificando:
                     dudosas.append(l)
+            self._confirmar_quietas(img)
             # las que se comprobaron leyéndolas y resultaron ser otro texto
             cambiadas += [l for l in self._por_quitar if l in self.seguidor.lineas and l not in cambiadas]
             self._por_quitar = []
@@ -1086,6 +1092,7 @@ class SesionEnVivo:
                 return False
             ahora = time.time()
             self.seguidor.quitar(cambiadas, ahora)
+            self._evento("quitada", cambiadas)
             self._invalidadas = [(c, t) for c, t in self._invalidadas if ahora - t < 5]
             self._invalidadas += [(l.caja, ahora) for l in cambiadas]
             self._releer += [l.caja for l in cambiadas]
@@ -1102,6 +1109,33 @@ class SesionEnVivo:
                 self.capa.mostrar(vis)
         self.bloques = vis
         return True
+
+    def _confirmar_quietas(self, img):
+        """Una línea leída una vez cuyo sitio no ha cambiado nada en un momento ya no se está
+        escribiendo: se confirma (y se pide su traducción) sin esperar a leerla otra vez."""
+        ahora = time.time()
+        listas = []
+        for l in self.seguidor.lineas:
+            if l.confirmada or l.huella_lect is None or ahora - l.t_lect < QUIETA_SEG:
+                continue
+            h = huella(img, l.caja)
+            if (h is not None and h.sum() >= MIN_TRAZOS and cambio_huella(l.huella_lect, h) < 0.08
+                    and cambio_local(l.huella_lect, h) < 0.3):
+                l.confirmada = True
+                l.huella = h
+                listas.append(l)
+            l.huella_lect = None
+        pend = [l for l in listas if self._pedidos.get(l.id) != l.texto]
+        for l in pend:
+            self._pedidos[l.id] = l.texto
+        if pend:
+            self._cola_trad.put([(l, l.texto, l.idioma) for l in pend])
+            self._evento("quieta: a traducir", pend)
+
+    def _evento(self, que, lineas):
+        """Registro de tiempos (para medir cuánto tarda cada paso)."""
+        self.eventos.append((time.time(), que, [l.texto[:14] for l in lineas]))
+        del self.eventos[:-60]
 
     def _verificar(self, img, lineas):
         """Lee solo esas líneas (un recorte pequeño, muy rápido) para saber si su texto sigue
@@ -1152,7 +1186,8 @@ class SesionEnVivo:
         # lo que hay que volver a mirar aunque la imagen no cambie: líneas por confirmar
         # (se leen dos veces antes de traducir) o que en la última lectura no se vieron
         for l in self.seguidor.lineas:
-            if l.fallos > 0 or l.candidato or (not l.confirmada and ahora - l.creada < 3.0):
+            esperando = not l.confirmada and l.huella_lect is not None   # se confirma por sus trazos
+            if l.fallos > 0 or l.candidato or (not l.confirmada and not esperando and ahora - l.creada < 3.0):
                 franjas.append((l.caja[1], l.caja[3]))
         if not franjas:
             if self.repintar or (self.pintor is not None and self.pintor.pendiente):
@@ -1268,6 +1303,8 @@ class SesionEnVivo:
                     ahora = time.time()
                     if leidas != []:
                         self.seguidor.actualizar(pars, ahora, leidas)
+                        self.eventos.append((ahora, "leído" if leidas else "leído todo",
+                                             [p["t"][:14] for p in pars]))
                         # cajas de todo el texto a la vista (lo que no se releyó sigue igual)
                         self._otras = [c for c in self._otras if leidas is not None
                                        and not en_franjas(c, leidas)] + [p["caja"] for p in pars]
@@ -1276,11 +1313,14 @@ class SesionEnVivo:
                         # los trazos de cada línea confirmada, tal como se ven en esta lectura
                         if l.confirmada and l.visto == ahora and not (l.trad and l.huella is not None):
                             l.huella = huella(img, l.caja)
+                        elif not l.confirmada and l.visto == ahora:
+                            l.huella_lect, l.t_lect = huella(img, l.caja), t_img
                     pend = [l for l in self.seguidor.pendientes() if self._pedidos.get(l.id) != l.texto]
                     for l in pend:
                         self._pedidos[l.id] = l.texto
                     if pend:
                         self._cola_trad.put([(l, l.texto, l.idioma) for l in pend])
+                        self._evento("a traducir", pend)
                     vis = self.seguidor.visibles(dx, dy)
                     traducidas = [l for l in self.seguidor.lineas if l.trad]
                     nuevas, self._nuevos = self._nuevos, []
@@ -1311,6 +1351,7 @@ class SesionEnVivo:
         self.lecturas += 1
         if self.natural is not None and piezas is not None:
             self.natural.actualizar(piezas, self.origen())
+            self._evento("pintado", [])
             self.bloques = bloques
             return nuevos
         firma = [(b["id"], tuple(int(v) for v in b["caja"]), b["traduccion"]) for b in bloques]

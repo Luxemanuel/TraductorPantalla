@@ -38,6 +38,15 @@ RUTA_PERFILES = os.path.join(BASE, "perfiles.json")
 log = logging.getLogger("traductor")
 
 
+def es_frase(texto, idioma):
+    """¿Parece una frase de diálogo (no un menú, una fecha o un número)? Solo esas se traducen con
+    la frase anterior como contexto."""
+    t = texto.strip()
+    if not t or sum(c.isdigit() for c in t) > 0.2 * len(t):
+        return False
+    return len(t) >= 8 if idioma in ("ja", "zh") else len(t.split()) >= 4
+
+
 SIGLA_RE = re.compile(r"^(?=.*[A-Z])[A-Z0-9+★☆]{1,5}$")
 
 
@@ -629,7 +638,7 @@ class Motor:
                 trads = [None] * len(lista)
                 if previo and hasattr(self.traductor, "con_contexto"):
                     for k, (_, t, _) in enumerate(lista):
-                        if t.strip() != previo.strip():
+                        if t.strip() != previo.strip() and es_frase(t, idioma):
                             trads[k] = self.traductor.con_contexto(t, previo, idioma, destino)
                 faltan = [k for k, tr in enumerate(trads) if not tr]
                 if faltan:

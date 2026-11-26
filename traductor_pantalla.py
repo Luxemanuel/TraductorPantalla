@@ -2041,7 +2041,8 @@ def autoprueba_estabilidad(m, lineas):
         ok_z = llego and siguen and isinstance(fr, list) and sum(b - a for a, b in fr) < 300
         lineas.append(f"Cambia solo la fecha: {'OK' if ok_z else 'FALLO'} en {tarda_f:.2f} s · lo demás intacto: "
                       f"{siguen} · franjas leídas {[(int(a), int(b)) for a, b in fr] if isinstance(fr, list) else fr} · "
-                      f"{[b['traduccion'][:30] for b in v.bloques if b['id'] not in quietas]}")
+                      f"{[b['traduccion'][:30] for b in v.bloques if b['id'] not in quietas]} · pasos "
+                      f"{[(round(t - t0, 2), q) for t, q, _ in getattr(v, 'eventos', []) if t >= t0]}")
         ok_e = ok_e and ok_z
         # el texto se va: su traducción también, ya
         vacia = ImageTk.PhotoImage(_escena_gacha(con_texto=False), master=juego)
