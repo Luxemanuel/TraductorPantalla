@@ -1051,6 +1051,8 @@ class SesionEnVivo:
             if visible and time.time() - self._ultima_captura > (0.05 if ocupada else 0.1):
                 self._ultima_captura = time.time()
                 img = self._capturar()
+                if time.time() - self._ultima_captura > 0.25:
+                    self.eventos.append((time.time(), f"captura lenta {time.time() - self._ultima_captura:.2f}", []))
                 # 1) ¿Siguen igual los trazos de lo ya traducido? Si no, se quita al momento.
                 self._revisar_fijas(img)
                 capturable = self.natural is not None and getattr(self.natural, "capturable", False)
@@ -1199,9 +1201,26 @@ class SesionEnVivo:
         self._lanzar(img, peq, franjas)
 
     def _ampliar(self, franjas, alto):
-        """Un margen alrededor de cada cambio, y que ninguna línea conocida quede cortada."""
-        out = unir_franjas([(a - max(16.0, min(60.0, 0.6 * (b - a))), b + max(16.0, min(60.0, 0.6 * (b - a))))
-                            for a, b in franjas], alto)
+        """Un margen alrededor de cada cambio, y que ninguna línea conocida quede cortada. Una línea
+        vecina que el margen apenas roza no se incluye (se recorta el margen): leer de más es
+        más lento."""
+        out = []
+        for a0, b0 in franjas:
+            m = max(16.0, min(60.0, 0.6 * (b0 - a0)))
+            a, b = a0 - m, b0 + m
+            for l in self.seguidor.lineas:
+                y0, y1 = l.caja[1], l.caja[3]
+                solape = min(b, y1) - max(a, y0)
+                if solape <= 0 or (y0 >= a and y1 <= b):
+                    continue
+                if (y1 > a0 and y0 < b0) or solape >= 0.35 * max(1.0, y1 - y0):
+                    a, b = min(a, y0 - 6), max(b, y1 + 6)          # la línea entra entera
+                elif y0 < a:
+                    a = max(a, y1 + 1)                             # solo la roza: fuera
+                else:
+                    b = min(b, y0 - 1)
+            out.append((a, b))
+        out = unir_franjas(out, alto)
         for _ in range(4):
             cambio, nuevas = False, []
             for a, b in out:
@@ -1272,6 +1291,8 @@ class SesionEnVivo:
         self.repintar = False
         if franjas != []:
             self.ultimas_franjas = franjas     # lo último que se leyó (None = toda la pantalla)
+        self.eventos.append((time.time(), "lanzar " + ("todo" if franjas is None else
+                             str([(int(a), int(b)) for a, b in franjas]) if franjas else "pintar"), []))
         self.ultimo_lanzamiento = time.time()
         cfg = self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
@@ -1303,7 +1324,7 @@ class SesionEnVivo:
                     ahora = time.time()
                     if leidas != []:
                         self.seguidor.actualizar(pars, ahora, leidas)
-                        self.eventos.append((ahora, "leído" if leidas else "leído todo",
+                        self.eventos.append((ahora, f"leído en {t1 - t0:.2f}" if leidas else f"leído todo en {t1 - t0:.2f}",
                                              [p["t"][:14] for p in pars]))
                         # cajas de todo el texto a la vista (lo que no se releyó sigue igual)
                         self._otras = [c for c in self._otras if leidas is not None
