@@ -129,8 +129,12 @@ def cambio_huella(h0, h1):
 MIN_TRAZOS = 40
 
 
-# medido: fondo animado ~0.06, texto resaltado de otro color ~0.21, otro texto ~0.4-0.5, sin texto 1
+# medido: fondo animado ~0.06 (hasta ~0.3 detrás de un cuadro casi transparente), texto resaltado
+# de otro color ~0.21, otra palabra ~0.5, otro texto ~0.4-0.9, sin texto 1.
+# Hasta UMBRAL_HUELLA: igual. Desde UMBRAL_SEGURO: otro texto seguro, se quita al momento.
+# Entre medias: se lee SOLO esa línea para saber si de verdad cambió (no parpadea por el fondo).
 UMBRAL_HUELLA = 0.30
+UMBRAL_SEGURO = 0.6
 
 
 # ============================================================================
@@ -797,6 +801,9 @@ class SesionEnVivo:
         self.ultimo_lanzamiento = 0
         self._ultima_captura = 0
         self._invalidadas = []
+        self._verificando = set()             # líneas que se están comprobando leyéndolas
+        self._por_quitar = []                 # comprobadas: era otro texto
+        self.verificaciones = 0
         self._pista = None                    # "ja"/"zh": idioma del juego, visto en una lectura completa
         self._otras = []                      # cajas del texto a la vista
         self.ultimas_franjas = None                 # [(caja, cuándo)] sitios cuyo texto cambió
@@ -1026,8 +1033,21 @@ class SesionEnVivo:
         if self.natural is not None and getattr(self.natural, "capturable", False):
             return False                       # la traducción sale en la captura: no se puede comparar
         with self.cerrojo:
-            fijas = self.seguidor.fijas()
-            cambiadas = [l for l in fijas if cambio_huella(l.huella, huella(img, l.caja)) > UMBRAL_HUELLA]
+            cambiadas, dudosas = [], []
+            for l in self.seguidor.fijas():
+                h = huella(img, l.caja)
+                c = cambio_huella(l.huella, h)
+                if c <= UMBRAL_HUELLA:
+                    continue
+                if c >= UMBRAL_SEGURO or h is None or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum()):
+                    cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
+                elif l.id not in self._verificando:
+                    dudosas.append(l)
+            # las que se comprobaron leyéndolas y resultaron ser otro texto
+            cambiadas += [l for l in self._por_quitar if l in self.seguidor.lineas and l not in cambiadas]
+            self._por_quitar = []
+            if dudosas:
+                self._verificar(img, dudosas)
             if not cambiadas:
                 return False
             ahora = time.time()
@@ -1047,6 +1067,39 @@ class SesionEnVivo:
                 self.capa.mostrar(vis)
         self.bloques = vis
         return True
+
+    def _verificar(self, img, lineas):
+        """Lee solo esas líneas (un recorte pequeño, muy rápido) para saber si su texto sigue
+        siendo el mismo. Mientras tanto la traducción se queda."""
+        ids = {l.id for l in lineas}
+        self._verificando |= ids
+        motor, cfg = self.app.motor, self.app.cfg
+        modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
+
+        def tarea():
+            try:
+                for l in lineas:
+                    x0, y0, x1, y1 = l.caja
+                    m = max(6.0, 0.4 * (y1 - y0))
+                    caja = (int(max(0, x0 - m)), int(max(0, y0 - m)),
+                            int(min(img.width, x1 + m)), int(min(img.height, y1 + m)))
+                    pars = motor.leer_parrafos(img.crop(caja), modo, omitir, seguir=lambda: self.activa,
+                                               pista=self._pista)
+                    leido = _n("".join(p["t"] for p in pars))
+                    igual = bool(leido) and _parecido(leido, _n(l.texto))[0] >= 0.85
+                    with self.cerrojo:
+                        if igual:
+                            l.huella = huella(img, l.caja)   # el mismo texto: sus trazos de ahora
+                        else:
+                            self._por_quitar.append(l)
+                    self.verificaciones += 1
+            except Cancelado:
+                pass
+            except Exception:
+                log_limitado("verificar", "Comprobando una línea")
+            finally:
+                self._verificando -= ids
+        threading.Thread(target=tarea, daemon=True).start()
 
     def _decidir_lectura(self, img, peq):
         ahora = time.time()

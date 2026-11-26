@@ -2682,15 +2682,18 @@ def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
     vuelve = bombear(5, lambda: ids_a and ids_a <= {i for i, a in en_pantalla().items() if a >= 255})
     lineas.append(f"La frase anterior vuelve: {'traducida a los %.2f s' % (time.time() - t0) if vuelve else 'NO volvió'}")
     # fondo que se mueve detrás del texto: esas frases pasan a vidrio y no se vuelven a traducir
-    t0, var = time.time(), 1
+    t0, var, vacios, vistas = time.time(), 1, 0, 0
     while time.time() - t0 < 3.0:
         mostrar(_escena_prueba(variante=var, opacidad_caja=90))
         var += 1
         bombear(0.12)
+        vistas += 1
+        vacios += time.time() - t0 > 0.5 and not en_pantalla()
     con_vidrio = bool(app.vivo and app.vivo.pintor.vidrio)
-    sigue = bool(en_pantalla())
+    sigue = bool(en_pantalla()) and vacios <= 1
     lineas.append(f"Fondo animado 3 s: vidrio {'sí' if con_vidrio else 'NO'}, la traducción sigue: "
-                  f"{'sí' if sigue else 'NO'}")
+                  f"{'sí' if sigue else 'NO'} · momentos sin traducción {vacios} de {vistas} · "
+                  f"líneas comprobadas leyéndolas {getattr(app.vivo, 'verificaciones', 0)}")
     captura("3_fondo_animado.png")
     mostrar(_escena_prueba())
     return ok and sigue
