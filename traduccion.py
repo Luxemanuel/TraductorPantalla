@@ -45,6 +45,28 @@ def _frases(texto):
 # ============================================================================
 # Google (en línea)
 # ============================================================================
+_FIN = re.compile(r"[.!?…。！？]+[\"'」』)）]*")
+
+
+def _contar_frases(texto):
+    """Frases de un texto original (lo que termina en . ! ? 。 ！ ？)."""
+    partes = [p for p in _FIN.split(texto) if p.strip(" \"'「」『』")]
+    return len(partes)
+
+
+def _frases_traducidas(texto):
+    salida, inicio = [], 0
+    for m in _FIN.finditer(texto):
+        frase = texto[inicio:m.end()].strip()
+        if frase:
+            salida.append(frase)
+        inicio = m.end()
+    resto = texto[inicio:].strip()
+    if resto:
+        salida.append(resto)
+    return salida
+
+
 class Google:
     nombre = "Google (en línea)"
     URL = "https://translate.googleapis.com/translate_a/single"
@@ -87,7 +109,12 @@ class Google:
             if leido >= limite:
                 salida.append(trad)
             elif leido + len(re.sub(r"\s+", "", orig)) > limite:
-                return None                      # una frase quedó partida entre las dos
+                # Google lo devolvió en un solo trozo: separar por frases si cuadran
+                frases = _frases_traducidas("".join(t for t, _ in trozos))
+                n_prev, n_act = _contar_frases(previo), _contar_frases(texto)
+                if n_act and len(frases) == n_prev + n_act:
+                    return " ".join(frases[n_prev:]).strip() or None
+                return None
             leido += len(re.sub(r"\s+", "", orig))
         res = "".join(salida).strip()
         return res or None
