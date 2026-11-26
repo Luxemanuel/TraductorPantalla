@@ -565,6 +565,7 @@ class CapaNatural:
 
     def permitir_captura(self, si):
         """Solo para pruebas: que las piezas salgan en una captura de pantalla."""
+        self.capturable = si          # mientras salgan en las capturas, no sirven para comparar
         for v in self.piezas.values():
             v.permitir_captura(si)
 

@@ -970,6 +970,8 @@ class SesionEnVivo:
     def _revisar_fijas(self, img):
         """Compara los trazos de cada traducción fija con los de ahora. Las que cambiaron (otro
         texto, o ya no hay texto) se quitan en este mismo instante."""
+        if self.natural is not None and getattr(self.natural, "capturable", False):
+            return False                       # la traducción sale en la captura: no se puede comparar
         with self.cerrojo:
             fijas = self.seguidor.fijas()
             cambiadas = [l for l in fijas if cambio_huella(l.huella, huella(img, l.caja)) > UMBRAL_HUELLA]
