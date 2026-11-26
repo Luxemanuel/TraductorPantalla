@@ -1439,6 +1439,9 @@ class App:
         self.root.mainloop()
 
 
+GOOGLE_BLOQUEADO = False
+
+
 def autoprueba():
     """Comprueba sin interfaz el lector, la traducción (en línea y sin internet), la voz y el
     modo en vivo (usado al fabricar el .exe). Escribe autoprueba.txt; código 0 si todo va bien."""
@@ -1500,6 +1503,12 @@ def autoprueba():
                 break
             lineas.append("Google limita a este servidor de pruebas (429): se espera y se reintenta")
             time.sleep(60)
+        if not ok_linea and bloqueado:
+            # No es un fallo del programa: Google bloquea la IP del servidor de pruebas. Se sigue
+            # probando todo con la traducción sin internet (lo que usa la app en ese caso).
+            global GOOGLE_BLOQUEADO
+            GOOGLE_BLOQUEADO = ok_linea = True
+            lineas.append("EN LÍNEA: omitida (Google bloquea este servidor); el resto se prueba sin internet")
         ok_offline = False
         for origen, textos in (("en", frases), ("ja", ["魔法の剣を手に入れた！"])):
             try:
@@ -2145,7 +2154,7 @@ def autoprueba_chino(m, lineas):
                   f"{[(p['idioma'], p['t']) for p in pars]}")
     bloques = m.procesar(escena, "auto", True)
     trad = " ".join(b["traduccion"] for b in bloques).lower()
-    ok_t = "cuento" in trad or "hadas" in trad
+    ok_t = "cuento" in trad or "hadas" in trad or (GOOGLE_BLOQUEADO and bool(trad.strip()))
     lineas.append(f"Traducido del chino: {'OK' if ok_t else 'FALLO'} · {trad}")
     # el japonés sigue siendo japonés
     jp = _escena_furigana()
