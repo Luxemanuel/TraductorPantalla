@@ -145,15 +145,17 @@ def cambio_local(h0, h1):
     return mayor
 
 
-def mismo_texto(a, b):
-    """¿Dos lecturas del mismo sitio dicen lo mismo? Tolera algún error del lector en letras, pero
-    no en números (una fecha o un contador que cambia es otro texto)."""
+def otro_texto(leido, conocido):
+    """La comprobación de una línea dudosa: ¿lo leído ahora es claramente OTRO texto? Con un fondo
+    que se mueve el lector se equivoca en alguna letra, así que solo cuenta como otro texto si
+    cambian los números (fecha, contador) o casi todo. Si no se leyó nada, no se da por cambiado:
+    un texto que se va se nota antes en sus trazos."""
     import unicodedata
-    na, nb = _n(a), _n(b)
+    na, nb = _n(leido), _n(conocido)
     if not na or not nb:
         return False
     cifras = lambda t: _re.sub(r"\D", "", unicodedata.normalize("NFKC", t))
-    return cifras(a) == cifras(b) and _parecido(na, nb)[0] >= 0.85
+    return cifras(leido) != cifras(conocido) or _parecido(na, nb)[0] < 0.7
 
 
 # medido: fondo animado ~0.06 (hasta ~0.3 detrás de un cuadro casi transparente), texto resaltado
@@ -163,6 +165,7 @@ def mismo_texto(a, b):
 UMBRAL_HUELLA = 0.30
 UMBRAL_SEGURO = 0.6
 UMBRAL_LOCAL = 0.5          # cambio en un trozo del ancho de una letra (ver cambio_local)
+UMBRAL_LOCAL_SEGURO = 0.8   # medido: otra palabra ~0.96, otro número ~0.85; fondo animado <= ~0.52
 
 
 # ============================================================================
@@ -1065,9 +1068,11 @@ class SesionEnVivo:
             for l in self.seguidor.fijas():
                 h = huella(img, l.caja)
                 c = cambio_huella(l.huella, h)
-                if c <= UMBRAL_HUELLA and cambio_local(l.huella, h) <= UMBRAL_LOCAL:
+                cl = cambio_local(l.huella, h)
+                if c <= UMBRAL_HUELLA and cl <= UMBRAL_LOCAL:
                     continue
-                if c >= UMBRAL_SEGURO or h is None or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum()):
+                if (c >= UMBRAL_SEGURO or cl >= UMBRAL_LOCAL_SEGURO or h is None
+                        or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum())):
                     cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
                 elif l.id not in self._verificando:
                     dudosas.append(l)
@@ -1113,7 +1118,7 @@ class SesionEnVivo:
                             int(min(img.width, x1 + m)), int(min(img.height, y1 + m)))
                     pars = motor.leer_parrafos(img.crop(caja), modo, omitir, seguir=lambda: self.activa,
                                                pista=self._pista)
-                    igual = mismo_texto(" ".join(p["t"] for p in pars), l.texto)
+                    igual = not otro_texto(" ".join(p["t"] for p in pars), l.texto)
                     with self.cerrojo:
                         if igual:
                             l.huella = huella(img, l.caja)   # el mismo texto: sus trazos de ahora
