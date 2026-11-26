@@ -507,6 +507,13 @@ class CapaNatural:
                 log_limitado("pieza", "Mostrando una pieza")
         self._animar()
 
+    def quitar_ids(self, ids):
+        """Quita ya las piezas de esas líneas (su texto cambió o se fue)."""
+        for clave, v in list(self.piezas.items()):
+            if any(int(i) in ids for i in clave.split("-") if i.isdigit()):
+                self._quitar(clave, v)
+        self._animar()
+
     def _quitar(self, clave, v):
         if self.fundido and self.visible_ and v.alfa > 0:
             v.saliendo, v.objetivo = True, 0

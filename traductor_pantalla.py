@@ -1515,6 +1515,8 @@ def autoprueba():
         if ok and envivo.ES_WINDOWS:
             ok = autoprueba_furigana(m, lineas)
         if ok and envivo.ES_WINDOWS:
+            ok = autoprueba_estabilidad(m, lineas)
+        if ok and envivo.ES_WINDOWS:
             ok = autoprueba_chino(m, lineas)
         if ok:
             ok = autoprueba_contexto_nombres_guion(m, lineas)
@@ -1884,6 +1886,137 @@ def _ventanas_encima(rect):
         return True
     u32.EnumWindows(cada, 0)
     return vistas
+
+
+TEXTO_GACHA = ("異世界募集【森の外-紅ずきん】にて使用される募集アイテム。黒月と学",
+               "会が共同開発した新型通信協定で、期間と適用範囲が限られているが、",
+               "時には予想外の効果を発揮し、長らく待ち望んだ人物を見つけることが",
+               "できる。")
+
+
+def _escena_gacha(con_texto=True):
+    """Como la descripción de un objeto en un juego: japonés pequeño, gris sobre oscuro, ventana grande."""
+    W, H = 1500, 430
+    img = Image.new("RGB", (W, H), (22, 22, 26))
+    d = ImageDraw.Draw(img)
+    titulo = nucleo.cargar_fuente_cjk(28)
+    cuerpo = nucleo.cargar_fuente_cjk(18)
+    if titulo is None or cuerpo is None:
+        return None
+    d.text((40, 30), "SSR", font=titulo, fill=(255, 190, 60))
+    d.text((40, 80), "「森の外」特別募集協定", font=titulo, fill=(240, 240, 240))
+    d.rectangle((40, 140, 600, 400), fill=(30, 30, 32), outline=(70, 70, 74))
+    if con_texto:
+        for i, t in enumerate(TEXTO_GACHA):
+            d.text((54, 154 + i * 27), t, font=cuerpo, fill=(168, 168, 172))
+        d.text((54, 270), "締切：2026-12-31 12:00", font=cuerpo, fill=(220, 30, 30))
+    return img
+
+
+def autoprueba_estabilidad(m, lineas):
+    """Letra pequeña japonesa, y que lo traducido no parpadee (ni con el cursor encima) y se
+    vaya en cuanto se va el texto."""
+    import ctypes
+    import difflib
+    lineas.append("--- Prueba LETRA PEQUEÑA y ESTABILIDAD ---")
+    if not m.lector.tiene_japones:
+        lineas.append("Sin lector japonés: prueba omitida")
+        return True
+    escena = _escena_gacha()
+    if escena is None:
+        lineas.append("Sin letra japonesa: prueba omitida")
+        return True
+    verdad = "".join(TEXTO_GACHA)
+    medidas = {}
+    for pasada in (False, True):
+        m.lector.segunda_pasada = pasada
+        pars = m.leer_parrafos(escena, "auto", True)
+        mejor = max((p["t"] for p in pars), key=lambda t: difflib.SequenceMatcher(None, t, verdad).ratio(), default="")
+        medidas[pasada] = difflib.SequenceMatcher(None, mejor, verdad).ratio()
+    m.lector.segunda_pasada = True
+    ok_l = medidas[True] >= 0.85
+    lineas.append(f"Japonés pequeño gris sobre oscuro: {'OK' if ok_l else 'FALLO'} · parecido al texto real "
+                  f"{medidas[False]:.2f} sin la segunda pasada → {medidas[True]:.2f} con ella")
+    app = _app_de_prueba(m)
+    r = app.root
+    r.withdraw()
+
+    def bombear(segundos, hasta=lambda: False):
+        fin = time.time() + segundos
+        while time.time() < fin:
+            r.update()
+            if hasta():
+                return True
+            time.sleep(0.02)
+        return hasta()
+    juego = tk.Toplevel(r)
+    juego.title("Juego con letra pequeña")
+    juego.geometry(f"{escena.width}x{escena.height}+20+120")
+    juego.attributes("-topmost", True)
+    foto = ImageTk.PhotoImage(escena, master=juego)
+    lbl = tk.Label(juego, image=foto, bd=0, highlightthickness=0)
+    lbl.pack()
+    juego.foto = foto
+    bombear(0.8)
+    hw = envivo.hwnd_de(juego)
+    rect = envivo.rect_cliente(hw)
+    _activar_con_clic(hw, rect, bombear)
+    app.iniciar_vivo(rect, None, ventana=hw)
+    v = app.vivo
+    listo = bombear(40, lambda: v.natural is not None and len(v.natural.piezas) >= 2
+                    and all(p.alfa >= 255 for p in v.natural.piezas.values()) and not v.ocupada())
+    lineas.append(f"Traducido: {'OK' if listo else 'FALLO'} · {[b['traduccion'][:40] for b in v.bloques]}")
+    ok_e = ok_q = False
+    if listo:
+        try:
+            import mss
+            v.natural.permitir_captura(True)
+            bombear(0.3)
+            with mss.mss() as sct:
+                sh = sct.grab(rect)
+            v.natural.permitir_captura(False)
+            Image.frombytes("RGB", sh.size, sh.bgra, "raw", "BGRX").save(
+                os.path.join(nucleo.BASE, "capturas_prueba", "10_letra_pequena.png"))
+        except Exception:
+            pass
+        # 8 s con el cursor paseando por encima del texto: nada debe parpadear ni releerse
+        claves = set(v.natural.piezas)
+        lect = v.lecturas
+        cambios, quitadas = 0, 0
+        u32 = ctypes.windll.user32
+        fin = time.time() + 8
+        k = 0
+        while time.time() < fin:
+            u32.SetCursorPos(rect["left"] + 60 + (k * 37) % 520, rect["top"] + 160 + (k * 13) % 120)
+            k += 1
+            bombear(0.1)
+            ahora = set(c for c, p in v.natural.piezas.items() if not p.saliendo)
+            if ahora != claves:
+                cambios += 1
+                quitadas += len(claves - ahora)
+                claves = ahora
+        ok_e = cambios == 0
+        lineas.append(f"Quieto 8 s con el cursor encima: {'OK' if ok_e else 'FALLO'} · cambios {cambios}, "
+                      f"traducciones quitadas {quitadas}, lecturas extra {v.lecturas - lect}")
+        # el texto se va: su traducción también, ya
+        vacia = ImageTk.PhotoImage(_escena_gacha(con_texto=False), master=juego)
+        juego.foto2 = vacia
+        del_cuerpo = {b["id"] for b in v.bloques if b["caja"][1] >= 140}
+        t0 = time.time()
+        lbl.configure(image=vacia)
+        se_fue = bool(del_cuerpo) and bombear(5, lambda: not any(b["id"] in del_cuerpo for b in v.bloques))
+        tarda = time.time() - t0
+        restantes = [b["original"][:12] for b in v.bloques]
+        ok_q = se_fue and tarda < 0.6
+        lineas.append(f"El texto se va y la traducción también: {'OK' if ok_q else 'FALLO'} en {tarda:.2f} s · "
+                      f"quedan {restantes}")
+    app.detener()
+    bombear(0.4)
+    for w in r.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    r.withdraw()
+    return ok_l and listo and ok_e and ok_q
 
 
 FRASES_CHINO = ("你喜欢童话故事吗？喜欢的话，请务必", "让我读给你听。我也非常、非常喜欢。")

@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+from PIL import Image
+
 from nucleo import JP_RE, ESP_ENTRE_JP, corregir_ingles, log
 
 ES_WINDOWS = sys.platform.startswith("win")
@@ -162,11 +164,43 @@ class LectorWindows:
             return []
         res = self.hilo.ejecutar(self._reconocer(img, codigos))
         lineas = {c: self._lineas(r, escala, c) for c, r in res.items()}
+        lineas = self._releer_letra_pequena(imagen, lineas, escala, lim)
         if modo == "auto" and "zh" in self.motores and "zh" not in lineas:
             cjk = [l["t"] for l in lineas.get("ja", []) if l["jp"]]
             if cjk and proporcion_kana(cjk) < 0.08:          # ideogramas sin kana: ¿chino?
                 lineas["zh"] = self._lineas(self.hilo.ejecutar(self._reconocer(img, ["zh"]))["zh"], escala, "zh")
         return self._combinar(lineas, modo)
+
+    def _releer_letra_pequena(self, imagen, lineas, escala, lim):
+        """Letra pequeña (menos de ~22 px), sobre todo japonés y chino, se lee mal a tamaño
+        normal. Segunda pasada: solo la zona donde hay texto, ampliada 2-3 veces. Se queda con
+        cada lectura donde la segunda encontró al menos lo mismo."""
+        todas = [l for ls in lineas.values() for l in ls]
+        if not todas:
+            return lineas
+        altos = sorted(l["y1"] - l["y0"] for l in todas)
+        alto = altos[len(altos) // 2]
+        if not getattr(self, "segunda_pasada", True) or alto * escala >= 22 or alto < 5:
+            return lineas
+        m = 14
+        x0 = max(0, int(min(l["x0"] for l in todas)) - m)
+        y0 = max(0, int(min(l["y0"] for l in todas)) - m)
+        x1 = min(imagen.width, int(max(l["x1"] for l in todas)) + m)
+        y1 = min(imagen.height, int(max(l["y1"] for l in todas)) + m)
+        f = min(3.0, 30.0 / alto, lim / max(1, x1 - x0, y1 - y0))
+        if f < 1.4 * escala:
+            return lineas
+        zona = imagen.convert("RGBA").crop((x0, y0, x1, y1))
+        zona = zona.resize((int(zona.width * f), int(zona.height * f)), Image.LANCZOS)
+        res = self.hilo.ejecutar(self._reconocer(zona, list(lineas)))
+        salida = {}
+        for c, r in res.items():
+            nuevas = [dict(l, x0=l["x0"] + x0, x1=l["x1"] + x0, y0=l["y0"] + y0, y1=l["y1"] + y0)
+                      for l in self._lineas(r, f, c)]
+            antes = sum(len(l["t"]) for l in lineas[c])
+            ahora = sum(len(l["t"]) for l in nuevas)
+            salida[c] = nuevas if ahora >= 0.8 * antes else lineas[c]
+        return salida
 
     def _combinar(self, lineas, modo):
         ja = [l for l in lineas.get("ja", []) if l["jp"]]

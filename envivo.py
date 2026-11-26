@@ -94,6 +94,38 @@ def diferencia(a, b):
     return ImageStat.Stat(ImageChops.difference(a, b).point(_LUT)).mean[0] / 255
 
 
+def huella(img, caja):
+    """Firma de los TRAZOS del texto en 'caja' (lo que tiene contraste con su entorno cercano), no
+    del fondo: sirve para saber, sin volver a leer, si el texto de ese sitio sigue igual. Un fondo
+    animado o un brillo suave casi no la cambian; otro texto, o que el texto se vaya, sí."""
+    import numpy as np
+    from PIL import ImageFilter
+    x0, y0, x1, y1 = (int(round(v)) for v in caja)
+    x0, y0 = max(0, x0 - 2), max(0, y0 - 2)
+    x1, y1 = min(img.width, x1 + 2), min(img.height, y1 + 2)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    g = img.crop((x0, y0, x1, y1)).convert("L")
+    radio = max(2, (y1 - y0) // 6)
+    a = np.asarray(g, np.int16)
+    m = np.abs(a - np.asarray(g.filter(ImageFilter.BoxBlur(radio)), np.int16)) > 20
+    return m
+
+
+def cambio_huella(h0, h1):
+    """0 = mismos trazos; 1 = nada que ver (otro texto, o ya no hay texto)."""
+    if h0 is None or h1 is None or h0.shape != h1.shape:
+        return 1.0
+    n0, n1 = int(h0.sum()), int(h1.sum())
+    if n0 + n1 < 30:
+        return 0.0 if abs(n0 - n1) < 15 else 1.0
+    return int((h0 ^ h1).sum()) / max(30, int((h0 | h1).sum()))
+
+
+# medido: fondo animado ~0.06, texto resaltado de otro color ~0.21, otro texto ~0.4-0.5, sin texto 1
+UMBRAL_HUELLA = 0.30
+
+
 # ============================================================================
 # Capa transparente con las traducciones
 # ============================================================================
@@ -455,7 +487,7 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva", "creada")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
@@ -469,6 +501,7 @@ class Linea:
         self.confirmada = False     # vista 2 veces seguidas con el mismo texto
         self.candidato, self.conf_cand = None, 0
         self.nueva = True
+        self.huella = None          # trazos de su sitio cuando se confirmó (ver huella())
 
 
 def _parecido(a, b):
@@ -522,16 +555,40 @@ class Seguidor:
         if l.trad:
             self.recientes[_n(l.texto)] = (l, ahora)
 
+    def fijas(self):
+        """Líneas traducidas cuyo sitio se vigila por sus trazos: mientras no cambien, se quedan
+        tal cual, lea lo que lea el lector (así una lectura con ruido no las hace parpadear)."""
+        return [l for l in self.lineas if l.trad and l.huella is not None]
+
+    def quitar(self, lineas, ahora):
+        for l in lineas:
+            if l in self.lineas:
+                self._retirar(l, ahora)
+
     def actualizar(self, pars, ahora):
         for k, (l, t) in list(self.recientes.items()):
             if ahora - t > self.RECIENTES_SEG:
                 del self.recientes[k]
-        libres = list(self.lineas)
-        vistas = set()
+        fijas = self.fijas()
+        libres = [l for l in self.lineas if l not in fijas]
+        vistas = {l.id for l in fijas}
         for p in pars:
             np_ = _n(p["t"])
             if not np_:
                 continue
+            encima = [l for l in fijas if _pisa(p["caja"], l.caja)]
+            if encima:
+                l = encima[0]
+                nl = _n(l.texto)
+                alto = max(8, l.caja[3] - l.caja[1])
+                crece = (p["caja"][2] > l.caja[2] + 0.6 * alto or p["caja"][3] > l.caja[3] + 0.6 * alto)
+                if crece and len(np_) >= len(nl) + 2 and _parecido(nl, np_)[1] >= 0.85:
+                    # el texto siguió escribiéndose después de traducirse: la versión completa
+                    self.lineas.remove(l)             # (no a "recientes": no debe volver la corta)
+                    fijas.remove(l)
+                    vistas.discard(l.id)
+                else:
+                    continue                  # ese sitio ya está traducido y no ha cambiado
             mejor, puntos = None, 0.0
             for l in libres:
                 if l.idioma == p["idioma"]:
@@ -548,6 +605,7 @@ class Seguidor:
                     if l.idioma == p["idioma"] and _parecido(np_, k)[0] >= 0.9:
                         del self.recientes[k]
                         l.caja, l.filas, l.visto, l.fallos = p["caja"], p.get("filas"), ahora, 0
+                        l.huella = None           # sus trazos se toman de nuevo en esta lectura
                         self.lineas.append(l)
                         vistas.add(l.id)
                         break
@@ -678,6 +736,8 @@ class SesionEnVivo:
         self.procesando = False
         self.ref = None
         self.ultimo_lanzamiento = 0
+        self._ultima_captura = 0
+        self._invalidadas = []                 # [(caja, cuándo)] sitios cuyo texto cambió
         self.bloques = []
         self.firma = None
         self.ultima_duracion = None
@@ -882,21 +942,67 @@ class SesionEnVivo:
                 if self.natural is not None:
                     self.natural.subir()
             ocupada = self.ocupada()
-            if visible and not self.procesando and time.time() - self.ultimo_lanzamiento > (0.05 if ocupada else 0.12):
+            if visible and time.time() - self._ultima_captura > (0.05 if ocupada else 0.1):
+                self._ultima_captura = time.time()
                 img = self._capturar()
-                peq = miniatura(img)
-                # Si la imagen no cambió nada, no hace falta leer. Si cambió (aunque sea un
-                # fondo animado), se lee el TEXTO: lo que ya estaba traducido se conserva.
-                # Aunque no cambie, se vuelve a mirar de vez en cuando: si una lectura salió mal
-                # (algo tapó el juego un instante), se arregla sola.
-                quieta = time.time() - self.ultimo_lanzamiento
-                if (self.ref is None or diferencia(peq, self.ref) > self.umbral * 0.5 or ocupada
-                        or quieta > (2.5 if not self.bloques else 6.0)):
-                    self._lanzar(img, peq)
+                # 1) ¿Siguen igual los trazos de lo ya traducido? Si no, se quita al momento.
+                cambiadas = self._revisar_fijas(img)
+                if not self.procesando:
+                    peq = miniatura(img)
+                    # 2) Leer solo si algo cambió FUERA de lo ya traducido (texto nuevo) o si
+                    #    algo se fue. Lo traducido y quieto no se vuelve a leer: no parpadea.
+                    sin_lineas = not self.seguidor.lineas
+                    if (self.ref is None or cambiadas or ocupada
+                            or self._cambio_fuera(peq) > self.umbral * 0.5
+                            or (sin_lineas and time.time() - self.ultimo_lanzamiento > 3.0)):
+                        self._lanzar(img, peq)
         except Exception:
             log_limitado("tick", "Bucle en vivo")
         if self.activa:
             self.app.root.after(60 if self.ocupada() else self.intervalo, self._tick)
+
+    def _revisar_fijas(self, img):
+        """Compara los trazos de cada traducción fija con los de ahora. Las que cambiaron (otro
+        texto, o ya no hay texto) se quitan en este mismo instante."""
+        with self.cerrojo:
+            fijas = self.seguidor.fijas()
+            cambiadas = [l for l in fijas if cambio_huella(l.huella, huella(img, l.caja)) > UMBRAL_HUELLA]
+            if not cambiadas:
+                return False
+            ahora = time.time()
+            self.seguidor.quitar(cambiadas, ahora)
+            self._invalidadas = [(c, t) for c, t in self._invalidadas if ahora - t < 5]
+            self._invalidadas += [(l.caja, ahora) for l in cambiadas]
+            dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
+            vis = self.seguidor.visibles(dx, dy)
+        ids = {l.id for l in cambiadas}
+        if self.natural is not None:
+            self.natural.quitar_ids(ids)
+        elif self.firma is not None:
+            self.firma = None
+            if self.estilo == "barra":
+                self.capa.mostrar_barra(vis)
+            elif self.app.cfg["modo_vista"] != "panel":
+                self.capa.mostrar(vis)
+        self.bloques = vis
+        return True
+
+    def _cambio_fuera(self, peq):
+        """Cuánto cambió la imagen sin contar los sitios ya traducidos (que se vigilan aparte)."""
+        if self.ref is None or self.ref.size != peq.size:
+            return 1.0
+        fijas = self.seguidor.fijas()
+        if not fijas:
+            return diferencia(peq, self.ref)
+        from PIL import ImageDraw
+        k = peq.width / max(1, self.region()["width"])
+        a, b = peq.copy(), self.ref.copy()
+        for im in (a, b):
+            d = ImageDraw.Draw(im)
+            for l in fijas:
+                x0, y0, x1, y1 = l.caja
+                d.rectangle((x0 * k - 2, y0 * k - 2, x1 * k + 2, y1 * k + 2), fill=0)
+        return diferencia(a, b)
 
     def _lanzar(self, img, peq):
         self.procesando = True
@@ -908,6 +1014,8 @@ class SesionEnVivo:
         motor = self.app.motor
         pintor, modo_texto = self.pintor, self.modo_texto()
 
+        t_img = time.time()
+
         def tarea():
             t0 = time.perf_counter()
             try:
@@ -917,7 +1025,15 @@ class SesionEnVivo:
                 t1 = time.perf_counter()
                 dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
                 with self.cerrojo:
-                    self.seguidor.actualizar(pars, time.time())
+                    # lo que se quitó mientras se leía esta imagen (ya no está) no vuelve
+                    pars = [p for p in pars if not any(t > t_img and _pisa(p["caja"], c)
+                                                       for c, t in self._invalidadas)]
+                    ahora = time.time()
+                    self.seguidor.actualizar(pars, ahora)
+                    for l in self.seguidor.lineas:
+                        # los trazos de cada línea confirmada, tal como se ven en esta lectura
+                        if l.confirmada and l.visto == ahora and not (l.trad and l.huella is not None):
+                            l.huella = huella(img, l.caja)
                     pend = [l for l in self.seguidor.pendientes() if self._pedidos.get(l.id) != l.texto]
                     for l in pend:
                         self._pedidos[l.id] = l.texto
