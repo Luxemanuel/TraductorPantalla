@@ -1910,7 +1910,7 @@ TEXTO_GACHA = ("異世界募集【森の外-紅ずきん】にて使用される
                "できる。")
 
 
-def _escena_gacha(con_texto=True):
+def _escena_gacha(con_texto=True, fecha="2026-12-31 12:00"):
     """Como la descripción de un objeto en un juego: japonés pequeño, gris sobre oscuro."""
     W, H = 980, 430
     img = Image.new("RGB", (W, H), (22, 22, 26))
@@ -1925,7 +1925,7 @@ def _escena_gacha(con_texto=True):
     if con_texto:
         for i, t in enumerate(TEXTO_GACHA):
             d.text((54, 154 + i * 27), t, font=cuerpo, fill=(168, 168, 172))
-        d.text((54, 270), "締切：2026-12-31 12:00", font=cuerpo, fill=(220, 30, 30))
+        d.text((54, 270), "締切：" + fecha, font=cuerpo, fill=(220, 30, 30))
     return img
 
 
@@ -2027,6 +2027,22 @@ def autoprueba_estabilidad(m, lineas):
         ok_e = cambios == 0
         lineas.append(f"Quieto 8 s con el cursor encima: {'OK' if ok_e else 'FALLO'} · cambios {cambios}, "
                       f"traducciones quitadas {quitadas}, lecturas extra {v.lecturas - lect} {detalle}")
+        # cambia SOLO una línea (la fecha): se lee solo esa franja; el resto no se toca
+        quietas = {b["id"]: b["traduccion"] for b in v.bloques if b["caja"][1] < 260}
+        otra = ImageTk.PhotoImage(_escena_gacha(fecha="2027-01-15 18:00"), master=juego)
+        juego.foto3 = otra
+        t0 = time.time()
+        lbl.configure(image=otra)
+        llego = bombear(10, lambda: any("2027" in b["original"] for b in v.bloques)
+                        and not any(b["traduccion"] != quietas.get(b["id"], b["traduccion"]) for b in v.bloques))
+        tarda_f = time.time() - t0
+        fr = v.ultimas_franjas
+        siguen = all(i in {b["id"] for b in v.bloques} for i in quietas)
+        ok_z = llego and siguen and isinstance(fr, list) and sum(b - a for a, b in fr) < 200
+        lineas.append(f"Cambia solo la fecha: {'OK' if ok_z else 'FALLO'} en {tarda_f:.2f} s · lo demás intacto: "
+                      f"{siguen} · franjas leídas {[(int(a), int(b)) for a, b in fr] if isinstance(fr, list) else fr} · "
+                      f"{[b['traduccion'][:30] for b in v.bloques if b['id'] not in quietas]}")
+        ok_e = ok_e and ok_z
         # el texto se va: su traducción también, ya
         vacia = ImageTk.PhotoImage(_escena_gacha(con_texto=False), master=juego)
         juego.foto2 = vacia
@@ -2759,7 +2775,8 @@ def autoprueba_vivo(m, lineas):
         except Exception as e:
             lineas.append(f"  diagnóstico: no se pudo ({e})")
     lineas.append(f"Actualización automática al cambiar el texto: {'OK' if ok2 else 'FALLO'} "
-                  f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+                  f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}"
+                  f" · franjas {getattr(app.vivo, 'ultimas_franjas', None)}")
     # modo subtítulos (barra) sobre la misma ventana
     t2 = time.time()
     app.iniciar_vivo(mon, caja, estilo="barra")

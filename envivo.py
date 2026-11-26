@@ -10,6 +10,7 @@ Traducción EN VIVO:
 import queue
 import sys
 import threading
+import math
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -524,6 +525,56 @@ def _pisa(a, b):
     return ix > 0 and iy > 0 and ix * iy > 0.3 * min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
 
 
+def _desplazar(p, dy):
+    """Párrafo leído en una franja -> coordenadas de la imagen entera."""
+    x0, y0, x1, y1 = p["caja"]
+    q = dict(p, caja=(x0, y0 + dy, x1, y1 + dy))
+    if p.get("filas"):
+        q["filas"] = [(t, (c[0], c[1] + dy, c[2], c[3] + dy)) for t, c in p["filas"]]
+    return q
+
+
+def en_franjas(caja, franjas):
+    """¿La caja quedó entera dentro de lo leído? (None = se leyó toda la pantalla)"""
+    return franjas is None or any(caja[1] >= y0 - 3 and caja[3] <= y1 + 3 for y0, y1 in franjas)
+
+
+def franjas_de_cambio(peq, ref, tapar, k, minimo=6):
+    """Franjas horizontales (y0, y1, en píxeles reales) donde la imagen cambió de verdad respecto a
+    la referencia, sin contar las cajas de 'tapar' (lo ya traducido, que se vigila por sus trazos).
+    k = ancho de la miniatura / ancho real."""
+    import numpy as np
+    if ref is None or ref.size != peq.size:
+        return None
+    m = np.abs(np.asarray(peq, np.int16) - np.asarray(ref, np.int16)) > 28
+    for x0, y0, x1, y1 in tapar:
+        m[max(0, int(y0 * k) - 2):int(y1 * k) + 3, max(0, int(x0 * k) - 2):int(x1 * k) + 3] = False
+    ys = np.nonzero(m.sum(1) >= 2)[0]
+    franjas = []
+    if len(ys):
+        ini = prev = int(ys[0])
+        for y in list(ys[1:]) + [None]:
+            if y is not None and y - prev <= 3:
+                prev = int(y)
+                continue
+            if int(m[ini:prev + 1].sum()) >= minimo:
+                franjas.append((ini / k, (prev + 1) / k))
+            if y is not None:
+                ini = prev = int(y)
+    return franjas
+
+
+def unir_franjas(franjas, alto, separacion=12):
+    franjas = sorted((max(0.0, a), min(float(alto), b)) for a, b in franjas)
+    unidas = []
+    for a, b in franjas:
+        if unidas and a <= unidas[-1][1] + separacion:
+            unidas[-1] = (unidas[-1][0], max(unidas[-1][1], b))
+        else:
+            unidas.append((a, b))
+    return unidas
+
+
 class Seguidor:
     """Empareja lo que lee el lector en cada vistazo con las líneas que ya conoce:
       · la misma línea (aunque se mueva, cambie el fondo o se lea una letra distinta)
@@ -571,7 +622,9 @@ class Seguidor:
             if l in self.lineas:
                 self._retirar(l, ahora)
 
-    def actualizar(self, pars, ahora):
+    def actualizar(self, pars, ahora, franjas=None):
+        """franjas: si se leyó solo una parte de la pantalla, las franjas (y0, y1) leídas. Lo que
+        está fuera no se ha mirado en esta lectura: se queda como estaba."""
         for k, (l, t) in list(self.recientes.items()):
             if ahora - t > self.RECIENTES_SEG:
                 del self.recientes[k]
@@ -650,7 +703,7 @@ class Seguidor:
         quitadas = False
         vistas_l = [l for l in self.lineas if l.id in vistas]
         for l in list(self.lineas):
-            if l.id in vistas:
+            if l.id in vistas or not en_franjas(l.caja, franjas):
                 continue
             if any(_pisa(l.caja, v.caja) for v in vistas_l):
                 self._retirar(l, ahora)          # otro texto ocupa su sitio: fue reemplazada
@@ -743,7 +796,10 @@ class SesionEnVivo:
         self.ref = None
         self.ultimo_lanzamiento = 0
         self._ultima_captura = 0
-        self._invalidadas = []                 # [(caja, cuándo)] sitios cuyo texto cambió
+        self._invalidadas = []
+        self._pista = None                    # "ja"/"zh": idioma del juego, visto en una lectura completa
+        self._otras = []                      # cajas del texto a la vista
+        self.ultimas_franjas = None                 # [(caja, cuándo)] sitios cuyo texto cambió
         self.bloques = []
         self.firma = None
         self.ultima_duracion = None
@@ -952,17 +1008,13 @@ class SesionEnVivo:
                 self._ultima_captura = time.time()
                 img = self._capturar()
                 # 1) ¿Siguen igual los trazos de lo ya traducido? Si no, se quita al momento.
-                cambiadas = self._revisar_fijas(img)
+                self._revisar_fijas(img)
                 capturable = self.natural is not None and getattr(self.natural, "capturable", False)
                 if not self.procesando and not capturable:   # con la traducción en la captura no se lee
-                    peq = miniatura(img)
-                    # 2) Leer solo si algo cambió FUERA de lo ya traducido (texto nuevo) o si
-                    #    algo se fue. Lo traducido y quieto no se vuelve a leer: no parpadea.
-                    sin_lineas = not self.seguidor.lineas
-                    if (self.ref is None or cambiadas or ocupada
-                            or self._cambio_fuera(peq) > self.umbral * 0.5
-                            or (sin_lineas and time.time() - self.ultimo_lanzamiento > 3.0)):
-                        self._lanzar(img, peq)
+                    # 2) Leer solo las franjas donde algo cambió FUERA de lo ya traducido (texto
+                    #    nuevo, o algo que se fue). Lo traducido y quieto no se vuelve a leer, y una
+                    #    zona que cambia no toca a las demás.
+                    self._decidir_lectura(img, miniatura(img))
         except Exception:
             log_limitado("tick", "Bucle en vivo")
         if self.activa:
@@ -996,6 +1048,72 @@ class SesionEnVivo:
         self.bloques = vis
         return True
 
+    def _decidir_lectura(self, img, peq):
+        ahora = time.time()
+        if self.ref is None or self.ref.size != peq.size:
+            return self._lanzar(img, peq)                     # primera vez: toda la pantalla
+        if not self.seguidor.lineas and ahora - self.ultimo_lanzamiento > 3.0:
+            return self._lanzar(img, peq)                     # nada a la vista: un vistazo general
+        franjas = []
+        if self._cambio_fuera(peq) > self.umbral * 0.5:
+            k = peq.width / max(1, img.width)
+            franjas = franjas_de_cambio(peq, self.ref, [l.caja for l in self.seguidor.fijas()], k)
+            if franjas is None:
+                return self._lanzar(img, peq)
+        # lo que hay que volver a mirar aunque la imagen no cambie: líneas por confirmar
+        # (se leen dos veces antes de traducir) o que en la última lectura no se vieron
+        for l in self.seguidor.lineas:
+            if l.fallos > 0 or l.candidato or (not l.confirmada and ahora - l.creada < 3.0):
+                franjas.append((l.caja[1], l.caja[3]))
+        if not franjas:
+            if self.repintar or (self.pintor is not None and self.pintor.pendiente):
+                self._lanzar(img, peq, [])                    # llegaron traducciones: solo pintar
+            return
+        franjas = self._ampliar(franjas, img.height)
+        if sum(b - a for a, b in franjas) > 0.6 * img.height:
+            return self._lanzar(img, peq)                     # cambió casi todo: otra pantalla
+        self._lanzar(img, peq, franjas)
+
+    def _ampliar(self, franjas, alto):
+        """Un margen alrededor de cada cambio, y que ninguna línea conocida quede cortada."""
+        out = unir_franjas([(a - max(16.0, min(60.0, 0.6 * (b - a))), b + max(16.0, min(60.0, 0.6 * (b - a))))
+                            for a, b in franjas], alto)
+        for _ in range(4):
+            cambio, nuevas = False, []
+            for a, b in out:
+                for l in self.seguidor.lineas:
+                    y0, y1 = l.caja[1], l.caja[3]
+                    if y1 > a and y0 < b and (y0 < a or y1 > b):
+                        a, b, cambio = min(a, y0 - 6), max(b, y1 + 6), True
+                nuevas.append((a, b))
+            out = unir_franjas(nuevas, alto)
+            if not cambio:
+                break
+        return out
+
+    def _leer_franjas(self, motor, img, franjas, modo, omitir):
+        """Lee cada franja por separado. Si un texto toca el borde de la franja (quedó cortado),
+        se amplía ese lado y se vuelve a leer."""
+        pars, leidas = [], []
+        for a, b in franjas:
+            a, b = int(a), int(math.ceil(b))
+            for _ in range(3):
+                ps = motor.leer_parrafos(img.crop((0, a, img.width, b)), modo, omitir,
+                                         seguir=lambda: self.activa, pista=self._pista)
+                ps = [_desplazar(p, a) for p in ps]
+                arriba = a > 0 and any(p["caja"][1] <= a + 2 for p in ps)
+                abajo = b < img.height and any(p["caja"][3] >= b - 2 for p in ps)
+                if not (arriba or abajo):
+                    break
+                paso = int(max(16, min(60, max(p["caja"][3] - p["caja"][1] for p in ps))))
+                a = max(0, a - paso) if arriba else a
+                b = min(img.height, b + paso) if abajo else b
+            for p in ps:            # dos franjas que acabaron solapándose: sin repetir
+                if not any(q["t"] == p["t"] and _pisa(q["caja"], p["caja"]) for q in pars):
+                    pars.append(p)
+            leidas.append((a, b))
+        return pars, leidas
+
     def _cambio_fuera(self, peq):
         """Cuánto cambió la imagen sin contar los sitios ya traducidos (que se vigilan aparte)."""
         if self.ref is None or self.ref.size != peq.size:
@@ -1013,10 +1131,22 @@ class SesionEnVivo:
                 d.rectangle((x0 * k - 2, y0 * k - 2, x1 * k + 2, y1 * k + 2), fill=0)
         return diferencia(a, b)
 
-    def _lanzar(self, img, peq):
+    def _lanzar(self, img, peq, franjas=None):
+        """franjas None: leer toda la pantalla. Lista de (y0, y1): leer solo esas franjas.
+        Lista vacía: no leer, solo pintar las traducciones que llegaron."""
         self.procesando = True
-        self.ref = peq
+        if franjas is None:
+            self.ref = peq
+        elif franjas:
+            # la referencia se pone al día SOLO en lo que se lee; el resto sigue esperando su turno
+            k = peq.width / max(1, img.width)
+            ref = self.ref.copy()
+            for a, b in franjas:
+                caja = (0, max(0, int(a * k) - 1), peq.width, min(peq.height, int(math.ceil(b * k)) + 1))
+                ref.paste(peq.crop(caja), caja[:2])
+            self.ref = ref
         self.repintar = False
+        self.ultimas_franjas = franjas
         self.ultimo_lanzamiento = time.time()
         cfg = self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
@@ -1028,8 +1158,16 @@ class SesionEnVivo:
         def tarea():
             t0 = time.perf_counter()
             try:
-                pars = motor.leer_parrafos(img, modo, omitir, seguir=lambda: self.activa)
-                if self.guion is not None:                 # Ren'Py: la frase exacta del guion
+                if franjas is None:
+                    pars, leidas = motor.leer_parrafos(img, modo, omitir, seguir=lambda: self.activa), None
+                    cjk = [p["idioma"] for p in pars if p["idioma"] in ("ja", "zh")]
+                    if cjk:                                # el idioma del juego, para leer por trozos
+                        self._pista = max(set(cjk), key=cjk.count)
+                elif franjas:
+                    pars, leidas = self._leer_franjas(motor, img, franjas, modo, omitir)
+                else:
+                    pars, leidas = [], []
+                if self.guion is not None and pars:        # Ren'Py: la frase exacta del guion
                     pars = self.guion.corregir(pars)
                 t1 = time.perf_counter()
                 dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
@@ -1038,7 +1176,12 @@ class SesionEnVivo:
                     pars = [p for p in pars if not any(t > t_img and _pisa(p["caja"], c)
                                                        for c, t in self._invalidadas)]
                     ahora = time.time()
-                    self.seguidor.actualizar(pars, ahora)
+                    if leidas != []:
+                        self.seguidor.actualizar(pars, ahora, leidas)
+                        # cajas de todo el texto a la vista (lo que no se releyó sigue igual)
+                        self._otras = [c for c in self._otras if leidas is not None
+                                       and not en_franjas(c, leidas)] + [p["caja"] for p in pars]
+                    otras = list(self._otras)
                     for l in self.seguidor.lineas:
                         # los trazos de cada línea confirmada, tal como se ven en esta lectura
                         if l.confirmada and l.visto == ahora and not (l.trad and l.huella is not None):
@@ -1057,7 +1200,7 @@ class SesionEnVivo:
                 piezas = None
                 if pintor is not None and modo_texto == "natural":
                     try:
-                        piezas = pintor.componer(img, traducidas, [p["caja"] for p in pars])
+                        piezas = pintor.componer(img, traducidas, otras)
                     except Exception:
                         log_limitado("componer", "Componiendo la traducción natural")
                         piezas = None

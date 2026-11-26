@@ -705,13 +705,14 @@ class Motor:
                                 "idioma": idioma_de(p)})
             return bloques
 
-    def leer_parrafos(self, imagen, modo="auto", omitir_espanol=True, seguir=lambda: True):
+    def leer_parrafos(self, imagen, modo="auto", omitir_espanol=True, seguir=lambda: True, pista=None):
         """Solo lectura (sin traducir): [{'caja':(x0,y0,x1,y1), 't', 'idioma'}]. Muy rápido."""
         with self._lock:
             if not seguir():
                 raise Cancelado()
             t0 = time.perf_counter()
-            filas = quitar_furigana(self.lector.leer(imagen, modo, seguir))
+            filas = quitar_furigana(self.lector.leer(imagen, modo, seguir, pista=pista) if pista
+                                    else self.lector.leer(imagen, modo, seguir))
             self.tiempos = (time.perf_counter() - t0, self.tiempos[1])
             return [{"caja": (p["x0"], p["y0"], p["x1"], p["y1"]), "t": p["t"],
                      "idioma": idioma_de(p), "filas": p["filas"]}

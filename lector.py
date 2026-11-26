@@ -143,7 +143,9 @@ class LectorWindows:
         resultados = await asyncio.gather(*(self.motores[c].recognize_async(sb) for c in codigos))
         return dict(zip(codigos, resultados))
 
-    def leer(self, imagen, modo="auto", seguir=lambda: True):
+    def leer(self, imagen, modo="auto", seguir=lambda: True, pista=None):
+        """pista: idioma CJK que ya se sabe que usa el juego ("ja" o "zh"). Sirve cuando se lee
+        solo un trozo de la pantalla: un renglón de puros kanji no se confunde con chino."""
         img = imagen.convert("RGBA")
         # El lector de Windows acierta más con letras de unos 20-40 px: ampliar zonas pequeñas
         escala = 2 if max(img.size) <= 1300 else 1
@@ -158,13 +160,16 @@ class LectorWindows:
             codigos = [modo]
         else:
             # el lector chino solo cuando hace falta (si hace poco se vio chino, desde el principio)
-            codigos = ["en", "ja"] + (["zh"] if time.time() - self.chino_visto < 30 else [])
+            codigos = ["en", "ja"] + (["zh"] if (time.time() - self.chino_visto < 30 or pista == "zh")
+                                      and pista != "ja" else [])
         codigos = [c for c in codigos if c in self.motores]
         if not codigos:
             return []
         res = self.hilo.ejecutar(self._reconocer(img, codigos))
         lineas = {c: self._lineas(r, escala, c) for c, r in res.items()}
         lineas = self._releer_letra_pequena(imagen, lineas, escala, lim)
+        if pista == "ja" and modo == "auto":
+            return self._combinar(lineas, "auto_ja")
         if modo == "auto" and "zh" in self.motores and "zh" not in lineas:
             cjk = [l["t"] for l in lineas.get("ja", []) if l["jp"]]
             if cjk and proporcion_kana(cjk) < 0.08:          # ideogramas sin kana: ¿chino?
@@ -210,7 +215,9 @@ class LectorWindows:
         if modo == "zh":
             return [dict(l, idi="zh") for l in zh]
         kana = proporcion_kana([l["t"] for l in ja])
-        if zh and kana < 0.08:
+        if modo == "auto_ja":
+            cjk = [dict(l, idi="ja") for l in ja]
+        elif zh and kana < 0.08:
             # pantalla en chino: las líneas del lector chino (y las japonesas con kana que no choquen)
             self.chino_visto = time.time()
             cjk = [dict(l, idi="zh") for l in zh]
@@ -265,7 +272,7 @@ class LectorEasyOCR:
         self.lector = easyocr.Reader(["ja", "en"], gpu=False, verbose=False)
         self.lector_en = easyocr.Reader(["en"], gpu=False, verbose=False)
 
-    def leer(self, imagen, modo="auto", seguir=lambda: True):
+    def leer(self, imagen, modo="auto", seguir=lambda: True, pista=None):
         import numpy as np
         from nucleo import unir_misma_linea, Cancelado
         arr = np.array(imagen.convert("RGB"))
