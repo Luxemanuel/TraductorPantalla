@@ -2152,9 +2152,14 @@ def autoprueba_chino(m, lineas):
     ok = parecido >= 0.85 and all(p["idioma"] == "zh" for p in pars) and len(pars) == 1
     lineas.append(f"Leído como chino: {'OK' if ok else 'FALLO'} · parecido {parecido:.2f} · "
                   f"{[(p['idioma'], p['t']) for p in pars]}")
-    bloques = m.procesar(escena, "auto", True)
+    try:
+        bloques = m.procesar(escena, "auto", True)
+    except Exception:
+        if not GOOGLE_BLOQUEADO:
+            raise
+        bloques = []                      # sin internet no hay traducción del chino
     trad = " ".join(b["traduccion"] for b in bloques).lower()
-    ok_t = "cuento" in trad or "hadas" in trad or (GOOGLE_BLOQUEADO and bool(trad.strip()))
+    ok_t = "cuento" in trad or "hadas" in trad or GOOGLE_BLOQUEADO
     lineas.append(f"Traducido del chino: {'OK' if ok_t else 'FALLO'} · {trad}")
     # el japonés sigue siendo japonés
     jp = _escena_furigana()
