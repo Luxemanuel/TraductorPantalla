@@ -129,12 +129,40 @@ def cambio_huella(h0, h1):
 MIN_TRAZOS = 40
 
 
+def cambio_local(h0, h1):
+    """El mayor cambio en un trozo del ancho de una letra. Un número que cambia (12:00 -> 12:01)
+    apenas mueve el total de la línea, pero su trozo cambia casi entero; un fondo que se mueve
+    cambia un poco por todas partes."""
+    if h0 is None or h1 is None or h0.shape != h1.shape:
+        return 1.0
+    r = h0.shape[0]
+    w = max(8, int(r * 0.6))
+    mayor = 0.0
+    for i in range(0, h0.shape[1], max(4, w // 2)):
+        u = int((h0[:, i:i + w] | h1[:, i:i + w]).sum())
+        if u >= max(15, 0.08 * r * w):
+            mayor = max(mayor, int((h0[:, i:i + w] ^ h1[:, i:i + w]).sum()) / u)
+    return mayor
+
+
+def mismo_texto(a, b):
+    """¿Dos lecturas del mismo sitio dicen lo mismo? Tolera algún error del lector en letras, pero
+    no en números (una fecha o un contador que cambia es otro texto)."""
+    import unicodedata
+    na, nb = _n(a), _n(b)
+    if not na or not nb:
+        return False
+    cifras = lambda t: _re.sub(r"\D", "", unicodedata.normalize("NFKC", t))
+    return cifras(a) == cifras(b) and _parecido(na, nb)[0] >= 0.85
+
+
 # medido: fondo animado ~0.06 (hasta ~0.3 detrás de un cuadro casi transparente), texto resaltado
 # de otro color ~0.21, otra palabra ~0.5, otro texto ~0.4-0.9, sin texto 1.
 # Hasta UMBRAL_HUELLA: igual. Desde UMBRAL_SEGURO: otro texto seguro, se quita al momento.
 # Entre medias: se lee SOLO esa línea para saber si de verdad cambió (no parpadea por el fondo).
 UMBRAL_HUELLA = 0.30
 UMBRAL_SEGURO = 0.6
+UMBRAL_LOCAL = 0.5          # cambio en un trozo del ancho de una letra (ver cambio_local)
 
 
 # ============================================================================
@@ -1037,7 +1065,7 @@ class SesionEnVivo:
             for l in self.seguidor.fijas():
                 h = huella(img, l.caja)
                 c = cambio_huella(l.huella, h)
-                if c <= UMBRAL_HUELLA:
+                if c <= UMBRAL_HUELLA and cambio_local(l.huella, h) <= UMBRAL_LOCAL:
                     continue
                 if c >= UMBRAL_SEGURO or h is None or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum()):
                     cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
@@ -1085,8 +1113,7 @@ class SesionEnVivo:
                             int(min(img.width, x1 + m)), int(min(img.height, y1 + m)))
                     pars = motor.leer_parrafos(img.crop(caja), modo, omitir, seguir=lambda: self.activa,
                                                pista=self._pista)
-                    leido = _n("".join(p["t"] for p in pars))
-                    igual = bool(leido) and _parecido(leido, _n(l.texto))[0] >= 0.85
+                    igual = mismo_texto(" ".join(p["t"] for p in pars), l.texto)
                     with self.cerrojo:
                         if igual:
                             l.huella = huella(img, l.caja)   # el mismo texto: sus trazos de ahora
@@ -1199,7 +1226,8 @@ class SesionEnVivo:
                 ref.paste(peq.crop(caja), caja[:2])
             self.ref = ref
         self.repintar = False
-        self.ultimas_franjas = franjas
+        if franjas != []:
+            self.ultimas_franjas = franjas     # lo último que se leyó (None = toda la pantalla)
         self.ultimo_lanzamiento = time.time()
         cfg = self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
