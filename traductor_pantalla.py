@@ -2029,6 +2029,7 @@ def autoprueba_estabilidad(m, lineas):
                       f"traducciones quitadas {quitadas}, lecturas extra {v.lecturas - lect} {detalle}")
         # cambia SOLO una línea (la fecha): se lee solo esa franja; el resto no se toca
         quietas = {b["id"]: b["traduccion"] for b in v.bloques if b["caja"][1] < 260}
+        v.perfilar = True
         otra = ImageTk.PhotoImage(_escena_gacha(fecha="2027-01-15 18:00"), master=juego)
         juego.foto3 = otra
         t0 = time.time()
@@ -2044,6 +2045,9 @@ def autoprueba_estabilidad(m, lineas):
                       f"{[b['traduccion'][:30] for b in v.bloques if b['id'] not in quietas]} · pasos "
                       f"{[(round(t - t0, 2), q) for t, q, _ in getattr(v, 'eventos', []) if t >= t0]}")
         ok_e = ok_e and ok_z
+        v.perfilar = False
+        if getattr(v, "perfil_texto", None):
+            lineas.append("  perfil de componer:\n" + "\n".join("    " + x for x in v.perfil_texto.splitlines()[:40]))
         # el texto se va: su traducción también, ya
         vacia = ImageTk.PhotoImage(_escena_gacha(con_texto=False), master=juego)
         juego.foto2 = vacia

@@ -1041,6 +1041,10 @@ class SesionEnVivo:
         if not self.activa:
             return
         try:
+            ahora_t = time.time()
+            if ahora_t - getattr(self, "_t_tick", ahora_t) > 0.5:
+                self.eventos.append((ahora_t, f"parón de la interfaz {ahora_t - self._t_tick:.2f}", []))
+            self._t_tick = ahora_t
             self._ticks = getattr(self, "_ticks", 0) + 1
             visible = self._seguir_ventana()
             if visible and self._ticks % 15 == 0:
@@ -1351,7 +1355,21 @@ class SesionEnVivo:
                 piezas = None
                 if pintor is not None and modo_texto == "natural":
                     try:
-                        piezas = pintor.componer(img, traducidas, otras)
+                        tc = time.perf_counter()
+                        if getattr(self, "perfilar", False):      # diagnóstico (autoprueba)
+                            import cProfile
+                            import io
+                            import pstats
+                            pr = cProfile.Profile()
+                            piezas = pr.runcall(pintor.componer, img, traducidas, otras)
+                            if time.perf_counter() - tc > 0.5:
+                                out = io.StringIO()
+                                pstats.Stats(pr, stream=out).sort_stats("cumulative").print_stats(18)
+                                self.perfil_texto = out.getvalue()
+                        else:
+                            piezas = pintor.componer(img, traducidas, otras)
+                        if time.perf_counter() - tc > 0.3:
+                            self.eventos.append((time.time(), f"componer {time.perf_counter() - tc:.2f}", []))
                     except Exception:
                         log_limitado("componer", "Componiendo la traducción natural")
                         piezas = None
