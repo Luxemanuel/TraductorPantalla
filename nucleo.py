@@ -819,7 +819,9 @@ def agrupar_parrafos(filas):
             if (p["jp"] == f["jp"] and p["idi"] == idioma_de(f) and larga
                     and not u["t"].rstrip().endswith(_FIN_FRASE)
                     and abs(f["x0"] - u["x0"]) < 1.0 * max(h, hu)
-                    and -0.2 * h <= f["y0"] - u["y1"] < 0.6 * max(h, hu)
+                    # chino/japonés: la caja es el carácter entero, así que el hueco entre renglones
+                    # se ve mayor que en el alfabeto latino
+                    and -0.2 * h <= f["y0"] - u["y1"] < (0.95 if f["jp"] else 0.6) * max(h, hu)
                     and abs(h - hu) < 0.35 * max(h, hu)):
                 if f["jp"]:
                     p["t"] += f["t"]
