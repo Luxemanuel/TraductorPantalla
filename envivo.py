@@ -834,6 +834,7 @@ class SesionEnVivo:
         self._invalidadas = []
         self._verificando = set()             # líneas que se están comprobando leyéndolas
         self._por_quitar = []                 # comprobadas: era otro texto
+        self._releer = []                     # sitios de traducciones quitadas: leerlos ya
         self.verificaciones = 0
         self._pista = None                    # "ja"/"zh": idioma del juego, visto en una lectura completa
         self._otras = []                      # cajas del texto a la vista
@@ -1087,6 +1088,7 @@ class SesionEnVivo:
             self.seguidor.quitar(cambiadas, ahora)
             self._invalidadas = [(c, t) for c, t in self._invalidadas if ahora - t < 5]
             self._invalidadas += [(l.caja, ahora) for l in cambiadas]
+            self._releer += [l.caja for l in cambiadas]
             dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
             vis = self.seguidor.visibles(dx, dy)
         ids = {l.id for l in cambiadas}
@@ -1139,12 +1141,14 @@ class SesionEnVivo:
             return self._lanzar(img, peq)                     # primera vez: toda la pantalla
         if not self.seguidor.lineas and ahora - self.ultimo_lanzamiento > 3.0:
             return self._lanzar(img, peq)                     # nada a la vista: un vistazo general
-        franjas = []
-        if self._cambio_fuera(peq) > self.umbral * 0.5:
-            k = peq.width / max(1, img.width)
-            franjas = franjas_de_cambio(peq, self.ref, [l.caja for l in self.seguidor.fijas()], k)
-            if franjas is None:
-                return self._lanzar(img, peq)
+        k = peq.width / max(1, img.width)
+        franjas = franjas_de_cambio(peq, self.ref, [l.caja for l in self.seguidor.fijas()], k, minimo=5)
+        if franjas is None:
+            return self._lanzar(img, peq)
+        # lo que se acaba de quitar porque su texto cambió: leer ese sitio aunque el cambio sea
+        # pequeño (un número de una fecha apenas se nota en la miniatura)
+        franjas += [(c[1], c[3]) for c in self._releer]
+        self._releer = []
         # lo que hay que volver a mirar aunque la imagen no cambie: líneas por confirmar
         # (se leen dos veces antes de traducir) o que en la última lectura no se vieron
         for l in self.seguidor.lineas:

@@ -2038,7 +2038,7 @@ def autoprueba_estabilidad(m, lineas):
         tarda_f = time.time() - t0
         fr = v.ultimas_franjas
         siguen = all(i in {b["id"] for b in v.bloques} for i in quietas)
-        ok_z = llego and siguen and isinstance(fr, list) and sum(b - a for a, b in fr) < 200
+        ok_z = llego and siguen and isinstance(fr, list) and sum(b - a for a, b in fr) < 300
         lineas.append(f"Cambia solo la fecha: {'OK' if ok_z else 'FALLO'} en {tarda_f:.2f} s · lo demás intacto: "
                       f"{siguen} · franjas leídas {[(int(a), int(b)) for a, b in fr] if isinstance(fr, list) else fr} · "
                       f"{[b['traduccion'][:30] for b in v.bloques if b['id'] not in quietas]}")
