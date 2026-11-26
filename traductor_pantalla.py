@@ -1484,15 +1484,22 @@ def autoprueba():
         # --- motores de traducción ---
         frases = ["Welcome to the village, traveler.", "Do you want to save your progress?"]
         ok_linea = False
-        for origen, textos, destino in (("en", frases, "es"), ("en", frases, "pt"),
-                                        ("ja", ["魔法の剣を手に入れた！"], "es")):
-            try:
-                t = time.perf_counter()
-                r = m.traductor.google.lote(textos, origen, destino)
-                lineas.append(f"EN LÍNEA {origen}→{destino}: {time.perf_counter() - t:.2f} s  {r}")
-                ok_linea = True
-            except Exception as e:
-                lineas.append(f"EN LÍNEA {origen}→{destino}: FALLO {e}")
+        bloqueado = 0
+        for intento in range(3):
+            for origen, textos, destino in (("en", frases, "es"), ("en", frases, "pt"),
+                                            ("ja", ["魔法の剣を手に入れた！"], "es")):
+                try:
+                    t = time.perf_counter()
+                    r = m.traductor.google.lote(textos, origen, destino)
+                    lineas.append(f"EN LÍNEA {origen}→{destino}: {time.perf_counter() - t:.2f} s  {r}")
+                    ok_linea = True
+                except Exception as e:
+                    bloqueado += "429" in str(e)
+                    lineas.append(f"EN LÍNEA {origen}→{destino}: FALLO {str(e)[:60]}")
+            if ok_linea or not bloqueado:
+                break
+            lineas.append("Google limita a este servidor de pruebas (429): se espera y se reintenta")
+            time.sleep(60)
         ok_offline = False
         for origen, textos in (("en", frases), ("ja", ["魔法の剣を手に入れた！"])):
             try:
