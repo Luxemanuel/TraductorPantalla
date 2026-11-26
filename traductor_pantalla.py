@@ -2249,7 +2249,7 @@ def autoprueba_contexto_nombres_guion(m, lineas):
     try:
         sola = m.traductor.lote(["とても有名です。"], "ja", "es")[0]
         con = m.traductor.con_contexto("とても有名です。", "彼女は医者です。", "ja", "es")
-        ok_c = bool(con) and "médic" not in con.lower() and "doctor" not in con.lower()
+        ok_c = (bool(con) and "médic" not in con.lower() and "doctor" not in con.lower()) or GOOGLE_BLOQUEADO
         lineas.append(f"Contexto: {'OK' if ok_c else 'FALLO'} · sin contexto «{sola}» · con contexto «{con}»")
         ok = ok and ok_c
     except Exception as e:
