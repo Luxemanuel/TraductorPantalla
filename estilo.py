@@ -340,6 +340,17 @@ def analizar(arr, caja, otras=(), filas_ocr=None):
         leidas = [(a, b) for a, b in filas
                   if any(min(b, d) - max(a, c) > 0.3 * (b - a) for c, d in ocr)]
         filas = leidas or filas
+    if filas_ocr and len(filas_ocr) > len(filas):
+        # renglones muy juntos: la tinta de varios se ve como una sola banda. Mandan los
+        # renglones leídos, ajustados a la tinta de cada uno.
+        tinta_filas = m_rell.any(1)
+        propias = []
+        for _, b in sorted(filas_ocr, key=lambda f: f[1][1]):
+            c, d = int(round(b[1] - cy0)), int(round(b[3] - cy0))
+            c, d = max(0, c), min(len(tinta_filas), d)
+            ys = np.nonzero(tinta_filas[c:d])[0]
+            propias.append((c + int(ys[0]), c + int(ys[-1]) + 1) if len(ys) else (c, d))
+        filas = [f for f in propias if f[1] > f[0]] or filas
     alineacion = "izq"
     if len(filas) > 1:
         izq, cen = [], []
@@ -1125,6 +1136,19 @@ def maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila):
             if all(f.getlength(x) <= anchos[-1] for x in frases):
                 return f, frases, 1.0, anchos[-1]
     filas_extra = [filas] + ([filas + 1] if abajo >= alto_fila * 0.9 else [])
+    # Con sitio libre debajo (dentro del mismo cuadro), antes que achicar la letra se añaden
+    # renglones: el español ocupa bastante más que el japonés o el chino.
+    sobran = int(abajo // max(1.0, alto_fila * 1.5)) if abajo > 0 else 0
+    for escala in (1.0, 0.95):
+        f = cargar(ruta, tam * escala, inst)
+        for a in anchos:
+            ls = _equilibrar(trad, f, filas, a)
+            if ls:
+                return f, ls, 1.0, a
+        for n in range(filas + 1, filas + 1 + min(sobran, 6)):
+            ls = _equilibrar(trad, f, n, anchos[-1])
+            if ls:
+                return f, ls, 1.0, anchos[-1]
     for escala in (1.0, 0.95, 0.9, 0.85, 0.8):
         f = cargar(ruta, tam * escala, inst)
         for a in anchos:

@@ -1895,8 +1895,8 @@ TEXTO_GACHA = ("異世界募集【森の外-紅ずきん】にて使用される
 
 
 def _escena_gacha(con_texto=True):
-    """Como la descripción de un objeto en un juego: japonés pequeño, gris sobre oscuro, ventana grande."""
-    W, H = 1500, 430
+    """Como la descripción de un objeto en un juego: japonés pequeño, gris sobre oscuro."""
+    W, H = 980, 430
     img = Image.new("RGB", (W, H), (22, 22, 26))
     d = ImageDraw.Draw(img)
     titulo = nucleo.cargar_fuente_cjk(28)
@@ -1905,7 +1905,7 @@ def _escena_gacha(con_texto=True):
         return None
     d.text((40, 30), "SSR", font=titulo, fill=(255, 190, 60))
     d.text((40, 80), "「森の外」特別募集協定", font=titulo, fill=(240, 240, 240))
-    d.rectangle((40, 140, 600, 400), fill=(30, 30, 32), outline=(70, 70, 74))
+    d.rectangle((40, 140, 700, 400), fill=(30, 30, 32), outline=(70, 70, 74))
     if con_texto:
         for i, t in enumerate(TEXTO_GACHA):
             d.text((54, 154 + i * 27), t, font=cuerpo, fill=(168, 168, 172))
@@ -1967,7 +1967,18 @@ def autoprueba_estabilidad(m, lineas):
                     and all(p.alfa >= 255 for p in v.natural.piezas.values()) and not v.ocupada())
     lineas.append(f"Traducido: {'OK' if listo else 'FALLO'} · {[b['traduccion'][:40] for b in v.bloques]}")
     ok_e = ok_q = False
+    ok_t = True
     if listo:
+        # la traducción del cuerpo debe caber en su cuadro, con letra parecida a la original
+        for c, p in v.natural.piezas.items():
+            if p.img is None:
+                continue
+            x, y = p.x - rect["left"], p.y - rect["top"]
+            w, h = p.img.size
+            if y + h / 2 > 140 and (x + w > 730 or y < 120 or h > 290):
+                ok_t = False
+        lineas.append(f"La traducción cabe en su cuadro: {'OK' if ok_t else 'FALLO'} · "
+                      f"{[(p.x - rect['left'], p.y - rect['top']) + tuple(p.img.size) for p in v.natural.piezas.values() if p.img is not None]}")
         try:
             import mss
             v.natural.permitir_captura(True)
@@ -2016,7 +2027,7 @@ def autoprueba_estabilidad(m, lineas):
         if isinstance(w, tk.Toplevel):
             w.destroy()
     r.withdraw()
-    return ok_l and listo and ok_e and ok_q
+    return ok_l and listo and ok_e and ok_q and ok_t
 
 
 FRASES_CHINO = ("你喜欢童话故事吗？喜欢的话，请务必", "让我读给你听。我也非常、非常喜欢。")
