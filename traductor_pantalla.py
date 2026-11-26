@@ -2712,6 +2712,18 @@ def autoprueba_vivo(m, lineas):
     t1 = time.time()
     ok2 = bombear(40, lambda: app.vivo is not None and any(
         "do you want to save your progress" in b["original"].lower() for b in app.vivo.bloques))
+    if not ok2 and app.vivo is not None:
+        v = app.vivo
+        try:
+            img = v._capturar()
+            lineas.append("  diagnóstico: " + str([(l.texto, tuple(int(c) for c in l.caja),
+                                                     None if l.huella is None else int(l.huella.sum()),
+                                                     round(envivo.cambio_huella(l.huella, envivo.huella(img, l.caja)), 3))
+                                                    for l in v.seguidor.lineas])
+                          + f" procesando={v.procesando} lecturas={v.lecturas} natural={v.natural is not None}")
+            img.save(os.path.join(nucleo.BASE, "capturas_prueba", "0_vivo_fallo.png"))
+        except Exception as e:
+            lineas.append(f"  diagnóstico: no se pudo ({e})")
     lineas.append(f"Actualización automática al cambiar el texto: {'OK' if ok2 else 'FALLO'} "
                   f"en {time.time() - t1:.1f} s  {[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
     # modo subtítulos (barra) sobre la misma ventana

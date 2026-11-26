@@ -106,10 +106,11 @@ def huella(img, caja):
     if x1 - x0 < 4 or y1 - y0 < 4:
         return None
     g = img.crop((x0, y0, x1, y1)).convert("L")
-    radio = max(2, (y1 - y0) // 6)
-    a = np.asarray(g, np.int16)
-    m = np.abs(a - np.asarray(g.filter(ImageFilter.BoxBlur(radio)), np.int16)) > 20
-    return m
+    radio = max(3, (y1 - y0) // 3)
+    d = np.abs(np.asarray(g, np.int16) - np.asarray(g.filter(ImageFilter.BoxBlur(radio)), np.int16))
+    # solo la tinta: lo que se aparta MUCHO de su fondo (el "halo" que deja el desenfoque
+    # alrededor de las letras se aparta poco y no cuenta)
+    return d > max(22, 0.45 * float(np.percentile(d, 99.5)))
 
 
 def cambio_huella(h0, h1):
@@ -117,9 +118,14 @@ def cambio_huella(h0, h1):
     if h0 is None or h1 is None or h0.shape != h1.shape:
         return 1.0
     n0, n1 = int(h0.sum()), int(h1.sum())
-    if n0 + n1 < 30:
-        return 0.0 if abs(n0 - n1) < 15 else 1.0
+    if n0 < MIN_TRAZOS:
+        return 1.0                        # no había trazos que comparar: no se puede dar por igual
+    if not 0.6 <= n1 / n0 <= 1.6:
+        return 1.0                        # mucha más o mucha menos tinta: otro texto o ya no hay
     return int((h0 ^ h1).sum()) / max(30, int((h0 | h1).sum()))
+
+
+MIN_TRAZOS = 40
 
 
 # medido: fondo animado ~0.06, texto resaltado de otro color ~0.21, otro texto ~0.4-0.5, sin texto 1
@@ -558,7 +564,7 @@ class Seguidor:
     def fijas(self):
         """Líneas traducidas cuyo sitio se vigila por sus trazos: mientras no cambien, se quedan
         tal cual, lea lo que lea el lector (así una lectura con ruido no las hace parpadear)."""
-        return [l for l in self.lineas if l.trad and l.huella is not None]
+        return [l for l in self.lineas if l.trad and l.huella is not None and l.huella.sum() >= MIN_TRAZOS]
 
     def quitar(self, lineas, ahora):
         for l in lineas:
