@@ -2189,6 +2189,9 @@ def autoprueba_chino(m, lineas):
         ok_j = bool(pj) and all(p["idioma"] == "ja" for p in pj)
         lineas.append(f"El japonés sigue siendo japonés: {'OK' if ok_j else 'FALLO'} · {[p['idioma'] for p in pj]}")
         ok = ok and ok_j
+    if GOOGLE_BLOQUEADO:
+        lineas.append("Chino en el estilo natural: omitida (sin internet no hay traducción del chino)")
+        return ok and ok_t
     listo, textos = _vivo_natural(m, lineas, escena, "Juego en chino de prueba", "9_chino.png")
     lineas.append(f"Chino en el estilo natural: {'OK' if listo else 'FALLO'} · {textos}")
     return ok and ok_t and listo

@@ -1082,17 +1082,33 @@ def agrupar(piezas):
 # ============================================================================
 # 5) Escribir la traducción en el hueco
 # ============================================================================
+def _largo(f, texto):
+    """f.getlength con memoria: medir texto es lo más caro de maquetar (en Windows, con letras
+    grandes, ~0.1 ms cada vez, y se mide muchas veces lo mismo)."""
+    memo = f.__dict__.setdefault("_largos", {})
+    v = memo.get(texto)
+    if v is None:
+        if len(memo) > 4000:
+            memo.clear()
+        v = memo[texto] = f.getlength(texto)
+    return v
+
+
 def _envolver(palabras, f, ancho):
-    lineas, actual = [], ""
+    """Reparte palabras en líneas de hasta 'ancho'. El ancho de una línea se suma por palabras
+    (cada palabra se mide una sola vez)."""
+    lineas, actual, largo = [], [], 0.0
+    esp = _largo(f, " ")
     for p in palabras:
-        prueba = (actual + " " + p).strip()
-        if not actual or f.getlength(prueba) <= ancho:
-            actual = prueba
+        lp = _largo(f, p)
+        if not actual or largo + esp + lp <= ancho:
+            largo = (largo + esp + lp) if actual else lp
+            actual.append(p)
         else:
-            lineas.append(actual)
-            actual = p
+            lineas.append(" ".join(actual))
+            actual, largo = [p], lp
     if actual:
-        lineas.append(actual)
+        lineas.append(" ".join(actual))
     return lineas
 
 
@@ -1101,11 +1117,11 @@ def _equilibrar(texto, f, filas_max, ancho_max):
     palabras = texto.split()
     if not palabras:
         return [""]
-    total = f.getlength(texto)
+    total = _largo(f, texto)
     if total <= ancho_max and filas_max >= 1:
         if filas_max == 1 or total <= ancho_max * 0.65:
             return [texto]
-    lo, hi = max(f.getlength(p) for p in palabras), max(total, 1)
+    lo, hi = max(_largo(f, p) for p in palabras), max(total, 1)
     if lo > ancho_max:
         return None
     mejor = None
@@ -1119,10 +1135,27 @@ def _equilibrar(texto, f, filas_max, ancho_max):
     if mejor is None:
         ls = _envolver(palabras, f, ancho_max)
         return ls if len(ls) <= filas_max else None
-    return mejor if max(f.getlength(l) for l in mejor) <= ancho_max + 0.5 else None
+    return mejor if max(_largo(f, l) for l in mejor) <= ancho_max + 0.5 else None
+
+
+_MAQUETAS = {}
 
 
 def maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila):
+    """Igual que _maquetar, con memoria: la misma traducción en el mismo hueco no se vuelve a
+    calcular en cada vistazo."""
+    clave = (trad, ruta, inst, round(tam, 2), round(ancho, 1), filas, tuple(round(v, 1) for v in espacio),
+             centrado, round(alto_fila, 1))
+    r = _MAQUETAS.get(clave)
+    if r is None:
+        if len(_MAQUETAS) > 300:
+            _MAQUETAS.clear()
+        r = _MAQUETAS[clave] = _maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila)
+    f, ls, comp, usado = r
+    return f, list(ls), comp, usado
+
+
+def _maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila):
     """Elige tamaño, líneas y ancho para que la traducción quepa en el hueco del original.
     Prioridad: mismo tamaño → usar el ancho libre del cuadro → achicar → una fila más (si hay
     sitio abajo) → estrechar un poco las letras. Devuelve (fuente, lineas, compresion, ancho_usado)."""
@@ -1133,7 +1166,7 @@ def maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila):
     if 1 < len(frases) <= filas:                 # una frase por línea, como el original
         for escala in (1.0, 0.95, 0.9):
             f = cargar(ruta, tam * escala, inst)
-            if all(f.getlength(x) <= anchos[-1] for x in frases):
+            if all(_largo(f, x) <= anchos[-1] for x in frases):
                 return f, frases, 1.0, anchos[-1]
     filas_extra = [filas] + ([filas + 1] if abajo >= alto_fila * 0.9 else [])
     # Con sitio libre debajo (dentro del mismo cuadro), antes que achicar la letra se añaden
@@ -1165,7 +1198,7 @@ def maquetar(trad, ruta, inst, tam, ancho, filas, espacio, centrado, alto_fila):
         f = cargar(ruta, tam * escala, inst)
         ls = _envolver(trad.split(), f, anchos[-1] * 1.18) or [trad]
         if len(ls) <= filas_extra[-1]:
-            largo = max(f.getlength(l) for l in ls)
+            largo = max(_largo(f, l) for l in ls)
             return f, ls, max(0.82, min(1.0, anchos[-1] / max(1, largo))), anchos[-1]
     f = cargar(ruta, tam * 0.65, inst)
     ls = _envolver(trad.split(), f, anchos[-1]) or [trad]
@@ -1220,7 +1253,7 @@ def escribir(grupo, trad, fuente, arr, modo="natural", respaldo=None):
         f = cargar(ruta, max(6, round(f.size)), inst)
     asc, desc = f.getmetrics()
     alto_linea = paso or (asc + desc) * 1.05
-    ancho_txt = max(f.getlength(l) for l in lineas) * compresion
+    ancho_txt = max(_largo(f, l) for l in lineas) * compresion
     margen = 10 + est["grosor"] * 2 + (max(abs(v) for v in est["sombra"][0]) if est["sombra"] else 0)
     cx = (x0 + x1) / 2
     izq_abs = (cx - ancho_txt / 2) if centrado else x0
@@ -1255,12 +1288,12 @@ def escribir(grupo, trad, fuente, arr, modo="natural", respaldo=None):
         kw = {"stroke_width": max(1, int(f.size / 18)), "stroke_fill": (0, 0, 0) if claro else (255, 255, 255)}
     y = y_ini - oy
     for linea in lineas:
-        w = f.getlength(linea) * compresion
+        w = _largo(f, linea) * compresion
         x = (cx - w / 2 if centrado else x0) - ox
         if compresion >= 0.999:
             capa, dd, xx = lienzo, d, x
         else:                                         # dibujar ancha y estrechar después
-            capa = Image.new("RGBA", (int(f.getlength(linea)) + 2 * margen, lienzo.height), (0, 0, 0, 0))
+            capa = Image.new("RGBA", (int(_largo(f, linea)) + 2 * margen, lienzo.height), (0, 0, 0, 0))
             dd, xx = ImageDraw.Draw(capa), margen
         if est["pixel"]:
             dd.fontmode = "1"
@@ -1378,4 +1411,4 @@ def _texto_con_respaldo(d, xy, texto, f, ruta, respaldo, **kw):
     for propia, t in tramos:
         fuente = f if propia else otra
         d.text((x, base), t, font=fuente, anchor="ls", **kw)
-        x += fuente.getlength(t)
+        x += _largo(fuente, t)
