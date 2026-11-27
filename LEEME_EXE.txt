@@ -26,11 +26,11 @@ TRADUCCIÓN EN VIVO
 
 CÓMO SE USA
   Abre tu juego, pulsa Ctrl+Alt+W estando en él y marca la zona del texto
-  (o Enter para toda la ventana). La traducción ocupa el lugar del texto con
-  su misma letra, color y contorno; si el fondo se mueve, esa frase se
-  escribe sobre un vidrio esmerilado. Mantén pulsada F8 para ver el original.
+  (o Enter para toda la ventana). Cada texto queda tapado por un rótulo
+  oscuro con su traducción, en una letra clara y fácil de leer. Mantén
+  pulsada F8 para ver el original.
   La próxima vez que abras ese juego la traducción empieza sola, con la misma
-  zona y la misma letra (se cambian en Ajustes > Juegos).
+  zona (se cambia en Ajustes > Juegos).
 
 MEMORIA Y CORRECCIONES
   Lo traducido se recuerda entre sesiones (memoria.sqlite): lo repetido sale

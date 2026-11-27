@@ -63,7 +63,7 @@ jobs:
             --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
             --hidden-import pystray._win32 --hidden-import brotli `
             --hidden-import actualizar --hidden-import subtitulos_voz --hidden-import lector `
-            --hidden-import traduccion --hidden-import version --hidden-import estilo `
+            --hidden-import traduccion --hidden-import version --hidden-import rotulos `
             --hidden-import capa_natural --hidden-import tema --hidden-import bandeja `
             --hidden-import marca --hidden-import marca_datos --hidden-import atajos --hidden-import guion `
             @extra lanzador.py
@@ -75,7 +75,7 @@ jobs:
           $d = "dist\Traductor de Pantalla"
           Copy-Item -Recurse modelos "$d\modelos"
           Copy-Item glosario.json "$d\glosario.json"
-          # fuentes libres para el estilo natural (las japonesas grandes no: Windows ya trae)
+          # letras libres: la de los rótulos (Noto Sans) y las del logotipo
           New-Item -ItemType Directory "$d\fuentes" -Force | Out-Null
           Get-ChildItem fuentes | Where-Object { $_.Name -notin @("NotoSansJP.ttf", "NotoSerifJP.ttf") } | Copy-Item -Destination "$d\fuentes"
           New-Item -ItemType Directory "$d\app" -Force | Out-Null

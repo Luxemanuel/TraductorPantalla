@@ -32,8 +32,8 @@ menú con todas las acciones junto al cursor.
 
 ## Qué hace
 
-- **Estilo natural**: imita la letra, el color, el contorno y la sombra del texto original, y usa
-  las fuentes del propio juego cuando las encuentra (también dentro de los archivos de Ren'Py).
+- **Rótulos claros**: cada texto queda tapado por un rótulo oscuro con su traducción, en una letra
+  común y legible, del tamaño del original. Cambiar una línea no toca las demás.
 - **Sigue el ritmo**: el texto que se escribe solo o cambia rápido se traduce al terminar; lo que
   vuelve a aparecer recupera su traducción al instante.
 - **Japonés de verdad**: lee japonés e inglés a la vez; la furigana no se traduce aparte.

@@ -809,7 +809,7 @@ class SesionEnVivo:
     ventana: hwnd del programa anclado (None = no anclado)"""
 
     def __init__(self, app, mon, caja, capturar=None, estilo="palabras", ventana=None,
-                 ruta_exe=None, fuente=None, letras=None):
+                 ruta_exe=None):
         import mss
         self.app = app
         self.ruta_exe = ruta_exe
@@ -820,8 +820,6 @@ class SesionEnVivo:
                 guion.cargar_en_segundo_plano(ruta_exe, self._poner_guion)
             except Exception:
                 log.exception("Guion del juego")
-        self.fuente_juego = fuente
-        self.letras = letras                   # letras ya decididas para este juego (perfil)
         self.natural = None                    # CapaNatural (traducción integrada en el juego)
         self.pintor = None
         self.viendo_original = False
@@ -881,8 +879,9 @@ class SesionEnVivo:
     def aplicar_modo(self):
         if self.modo_texto() == "natural" and self.natural is None:
             import capa_natural
+            import rotulos
             self.natural = capa_natural.CapaNatural(self.app)
-            self.pintor = capa_natural.Pintor(self.ruta_exe, self.fuente_juego, self.letras)
+            self.pintor = rotulos.Rotulador(self.app.cfg.get("idioma_destino", "es"))
             if self.oculta or self.viendo_original:
                 self.natural.visible(False)
             self.capa.limpiar()

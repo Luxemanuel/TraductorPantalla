@@ -369,19 +369,15 @@ class VentanaConfig:
                        "con la misma letra. Los cambios de esta pestaña se guardan al momento.").pack(anchor="w")
         marco = ttk.Frame(f)
         marco.pack(fill="both", expand=True, pady=8)
-        t = self.tabla_juegos = ttk.Treeview(marco, columns=("j", "z", "a", "f"), show="headings",
+        t = self.tabla_juegos = ttk.Treeview(marco, columns=("j", "z", "a"), show="headings",
                                               height=9, selectmode="browse")
-        for col, txt, ancho in (("j", "Juego", 220), ("z", "Zona", 120), ("a", "Empieza solo", 100),
-                                ("f", "Letra", 230)):
+        for col, txt, ancho in (("j", "Juego", 300), ("z", "Zona", 160), ("a", "Empieza solo", 110)):
             t.heading(col, text=txt)
-            t.column(col, width=ancho, stretch=col in ("j", "f"))
+            t.column(col, width=ancho, stretch=col == "j")
         t.pack(fill="both", expand=True)
         bot = ttk.Frame(f)
         bot.pack(fill="x")
         ttk.Button(bot, text="Empezar solo: sí / no", command=self._perfil_auto).pack(side="left", padx=2)
-        ttk.Button(bot, text="Elegir letra…", command=self._perfil_fuente).pack(side="left", padx=(10, 2))
-        ttk.Button(bot, text="Volver a decidir la letra", command=lambda: self._perfil_cambiar(fuente=None, letras=None)
-                   ).pack(side="left", padx=2)
         ttk.Button(bot, text="Borrar", command=self._perfil_borrar).pack(side="right", padx=2)
         self.lbl_sin_juegos = ttk.Label(marco, style="Tarjeta.TLabel", foreground=tema.TENUE, justify="center",
                                         text="Todavía no hay juegos.\nAbre tu juego y pulsa "
@@ -398,21 +394,9 @@ class VentanaConfig:
         for clave, p in sorted(perf.items(), key=lambda kv: -kv[1].get("usado", 0)):
             zona = "ventana entera" if not p.get("zona") else "{}×{} px".format(
                 int(p["zona"][2] - p["zona"][0]), int(p["zona"][3] - p["zona"][1]))
-            if p.get("fuente"):
-                letra = os.path.splitext(os.path.basename(p["fuente"]))[0] + " (elegida)"
-            elif p.get("letras"):
-                nombres = []
-                for d in p["letras"]:
-                    n = os.path.splitext(os.path.basename(d.get("ruta") or ""))[0].split("_", 1)[-1]
-                    n = f"{n} {d.get('inst') or ''}".strip()
-                    if n and n not in nombres:
-                        nombres.append(n)
-                letra = ", ".join(nombres)
-            else:
-                letra = "se decide al jugar"
             t.insert("", "end", iid=clave, values=(p.get("nombre") or os.path.basename(p.get("exe", "")),
                                                     zona + (" · subtítulos" if p.get("estilo") == "barra" else ""),
-                                                    "sí" if p.get("auto", True) else "no", letra))
+                                                    "sí" if p.get("auto", True) else "no"))
         if sel and t.exists(sel[0]):
             t.selection_set(sel[0])
         if perf:
@@ -442,35 +426,6 @@ class VentanaConfig:
         _, p = self._perfil()
         if p is not None:
             self._perfil_cambiar(auto=not p.get("auto", True))
-
-    def _perfil_fuente(self):
-        clave, p = self._perfil()
-        if p is None:
-            messagebox.showinfo("Juegos", "Primero elige un juego de la lista.", parent=self.win)
-            return
-        ruta = filedialog.askopenfilename(parent=self.win, title="Letra para este juego",
-                                          initialdir=os.path.dirname(p.get("exe", "")) or None,
-                                          filetypes=[("Fuentes", "*.ttf *.otf *.ttc *.woff *.woff2"),
-                                                     ("Todos", "*.*")])
-        if not ruta:
-            return
-        try:
-            import estilo
-            carpeta = os.path.join(nucleo.BASE, "fuentes_usuario")
-            os.makedirs(carpeta, exist_ok=True)
-            if ruta.lower().endswith((".woff", ".woff2")):
-                destino = os.path.join(carpeta, os.path.splitext(os.path.basename(ruta))[0] + ".ttf")
-                shutil.copyfile(estilo._woff_a_ttf(ruta), destino)
-            else:
-                destino = os.path.join(carpeta, os.path.basename(ruta))
-                if os.path.abspath(ruta) != os.path.abspath(destino):
-                    shutil.copyfile(ruta, destino)
-            from PIL import ImageFont
-            ImageFont.truetype(destino, 20).getbbox("Ab")
-        except Exception as e:
-            messagebox.showwarning("Juegos", f"No pude usar esa fuente: {e}", parent=self.win)
-            return
-        self._perfil_cambiar(fuente=destino)
 
     def _perfil_borrar(self):
         clave, p = self._perfil()
@@ -1217,11 +1172,10 @@ def ventana_ayuda(app):
      exclusiva Windows no deja dibujar nada encima).
   2. Pulsa {at['anclar']} estando en el juego y marca la zona del texto
      (o Enter para toda la ventana).
-  3. Listo: la traducción ocupa el lugar del texto, con su misma letra,
-     color y contorno. Si el fondo se mueve, esa frase se escribe sobre un
-     vidrio esmerilado. Los clics y el teclado la atraviesan.
+  3. Listo: cada texto queda tapado por un rótulo con su traducción, en
+     una letra clara. Los clics y el teclado lo atraviesan.
   La próxima vez que abras ese juego la traducción empieza sola, con la
-  misma zona y la misma letra (Ajustes → Juegos para cambiarlo).
+  misma zona (Ajustes → Juegos para cambiarlo).
   Mantén {at['original']} para ver el texto original mientras la pulsas.
   {at['anclar']} otra vez, en el mismo juego, la apaga.
 

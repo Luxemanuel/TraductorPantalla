@@ -585,14 +585,12 @@ class App:
                 exe = None
         except Exception:
             log.exception("Buscando el programa de la zona")
-        perfil = self.perfiles.get(nucleo.clave_perfil(exe), {}) if exe else {}
         if ventana and exe:
             self._guardar_perfil(exe, ventana, mon, caja, estilo)
         try:
             self.vivo = envivo.SesionEnVivo(self, mon, caja, estilo=estilo, ventana=ventana,
                                             capturar=getattr(self, "capturar_vivo", None),
-                                            ruta_exe=exe, fuente=perfil.get("fuente"),
-                                            letras=perfil.get("letras"))
+                                            ruta_exe=exe)
         except Exception as e:
             log.exception("No se pudo iniciar el modo en vivo")
             self.vivo = None
@@ -705,15 +703,7 @@ class App:
             self.bandeja = None
 
     def perfil_cambiado(self, clave):
-        """Se cambió la letra de un juego en Ajustes: si se está traduciendo, aplicarlo ya."""
-        v = self.vivo
-        if v is None or not v.ruta_exe or nucleo.clave_perfil(v.ruta_exe) != clave or v.pintor is None:
-            return
-        import capa_natural
-        p = self.perfiles.get(clave, {})
-        v.fuente_juego, v.letras = p.get("fuente"), p.get("letras")
-        v.pintor = capa_natural.Pintor(v.ruta_exe, v.fuente_juego, v.letras)
-        v.ref = None
+        pass
 
     # ---------- corregir una traducción ----------
     def corregir_traduccion(self, entrada, nueva):
@@ -745,19 +735,8 @@ class App:
             except tk.TclError:
                 pass
 
-    def _guardar_letras(self, sesion):
-        """Las letras decididas para el juego quedan en su perfil (la próxima vez, sin buscar)."""
-        p = sesion.pintor
-        clave = nucleo.clave_perfil(sesion.ruta_exe) if sesion.ruta_exe else None
-        if p is None or not p.cambios or clave not in self.perfiles:
-            return
-        p.cambios = False
-        self.perfiles[clave]["letras"] = p.exportar()
-        nucleo.guardar_perfiles(self.perfiles)
-
     def detener_vivo(self):
         if self.vivo is not None:
-            self._guardar_letras(self.vivo)
             self.vivo.detener()
             self.vivo = None
             self._ocultar_mis_ventanas(False)
@@ -791,8 +770,6 @@ class App:
         if not getattr(self, "_chino_visto", False) and any(b["idioma"] == "zh" for b in bloques):
             self._chino_visto = True                      # el respaldo sin internet también para el chino
             self._preparar_sin_internet(self.cfg["idioma_destino"], ("zh",))
-        if sesion.pintor is not None and sesion.pintor.cambios:
-            self._guardar_letras(sesion)
         if bloques:
             self.ultimos_bloques = bloques
         if nuevos:
@@ -1722,7 +1699,7 @@ def _escena_prueba(lineas=("I never thought I'd see this place again.", "The lan
     """Un cuadro de diálogo de novela visual (fondo con manchas, caja semitransparente,
     nombre en una etiqueta y líneas con sombra) para probar el estilo natural.
     variante > 0 mueve las manchas del fondo (fondo animado)."""
-    import estilo
+    import rotulos
     from PIL import ImageFilter
     W, H = 900, 300
     g = Image.linear_gradient("L").resize((W, H))
@@ -1743,9 +1720,9 @@ def _escena_prueba(lineas=("I never thought I'd see this place again.", "The lan
     dc.rounded_rectangle((50, 98, 190, 136), radius=8, fill=(122, 30, 60, 240))
     img.alpha_composite(capa)
     d = ImageDraw.Draw(img)
-    nunito, mont = estilo._buscar_archivo("Nunito.ttf"), estilo._buscar_archivo("Montserrat.ttf")
-    f = estilo.cargar(nunito, 26, "ExtraLight") if nunito else nucleo.cargar_fuente("Arial", 26)
-    fn = estilo.cargar(mont, 22, "SemiBold") if mont else nucleo.cargar_fuente("Arial", 22, True)
+    f = ImageFont.truetype(os.path.join(rotulos.marca.CARPETA_FUENTES, "NotoSans.ttf"), 26)
+    f.set_variation_by_axes([300, 100])
+    fn = rotulos.fuente(22)
     d.text((70, 104), "Aria", font=fn, fill=(255, 225, 150))
     for y, t in zip((160, 202, 244), lineas):
         if t:
@@ -2536,10 +2513,6 @@ def autoprueba_natural(m, lineas):
     lineas.append(f"Natural en pantalla: {'OK' if ok1 else 'FALLO'} en {time.time() - t0:.1f} s · piezas "
                   f"{list(v.natural.piezas) if v and v.natural else None} · "
                   f"{[b['traduccion'] for b in v.bloques] if v else None}")
-    if v is not None and v.pintor is not None:
-        lineas.append("  letras decididas: " + "; ".join(
-            f"{os.path.basename(d['ruta'] or '?')} {d['inst'] or ''} (parecido {d['puntos']:.2f})"
-            for d in v.pintor.decisiones))
 
     def captura(nombre):
         app.vivo.natural.permitir_captura(True)
@@ -2629,7 +2602,7 @@ def autoprueba_natural(m, lineas):
 
 def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
     """El diálogo avanza solo (máquina de escribir): lo anterior se quita enseguida, lo nuevo
-    se traduce al terminar de escribirse, la letra no cambia y un fondo animado pasa a vidrio."""
+    se traduce al terminar de escribirse, y un fondo animado no hace parpadear la traducción."""
     def mostrar(img):
         f = ImageTk.PhotoImage(img, master=juego)
         lbl.configure(image=f)
@@ -2651,9 +2624,6 @@ def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
             if palabra in b["original"].lower() and b.get("traduccion"):
                 return b["id"]
         return None
-    v = app.vivo
-    letras_a = {e["fuente"][:2] for e in v.pintor.lineas.values() if e.get("fuente")}
-    decisiones_a = len(v.pintor.decisiones)
     ids_a = set(en_pantalla())
     ok = True
     frases = (("Do you remember the festival we had here?", "festival"),
@@ -2673,23 +2643,16 @@ def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
         t1 = time.time()
         lista = bombear(8, lambda: (id_de(clave) is not None and en_pantalla().get(id_de(clave), 0) >= 255))
         tarda = time.time() - t1
-        i = id_de(clave)
-        e = app.vivo.pintor.lineas.get(i) if (app.vivo and i is not None) else None
-        misma_letra = bool(e and e.get("fuente") and e["fuente"][:2] in letras_a)
         lineas.append(f"Texto automático «{frase[:24]}…»: lo anterior se quitó "
                       f"{'a los %.2f s' % quitada if quitada is not None else 'NUNCA'} de empezar; traducido "
-                      f"{'%.2f s después de escribirse' % tarda if lista else 'NO'}; "
-                      f"misma letra: {'sí' if misma_letra else 'NO'}")
-        ok = ok and lista and quitada is not None and quitada < 1.5 and misma_letra
-    nuevas = len(app.vivo.pintor.decisiones) - decisiones_a
-    lineas.append(f"Decisiones de letra nuevas durante el diálogo: {nuevas} (debe ser 0)")
-    ok = ok and nuevas == 0
+                      f"{'%.2f s después de escribirse' % tarda if lista else 'NO'}")
+        ok = ok and lista and quitada is not None and quitada < 1.5
     # vuelve la escena original: recupera su traducción al instante (sin confirmar ni traducir)
     mostrar(_escena_prueba())
     t0 = time.time()
     vuelve = bombear(5, lambda: ids_a and ids_a <= {i for i, a in en_pantalla().items() if a >= 255})
     lineas.append(f"La frase anterior vuelve: {'traducida a los %.2f s' % (time.time() - t0) if vuelve else 'NO volvió'}")
-    # fondo que se mueve detrás del texto: esas frases pasan a vidrio y no se vuelven a traducir
+    # fondo que se mueve detrás del texto: la traducción no parpadea ni se vuelve a traducir
     t0, var, vacios, vistas = time.time(), 1, 0, 0
     while time.time() - t0 < 3.0:
         mostrar(_escena_prueba(variante=var, opacidad_caja=90))
@@ -2697,9 +2660,8 @@ def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
         bombear(0.12)
         vistas += 1
         vacios += time.time() - t0 > 0.5 and not en_pantalla()
-    con_vidrio = bool(app.vivo and app.vivo.pintor.vidrio)
     sigue = bool(en_pantalla()) and vacios <= 1
-    lineas.append(f"Fondo animado 3 s: vidrio {'sí' if con_vidrio else 'NO'}, la traducción sigue: "
+    lineas.append(f"Fondo animado 3 s: la traducción sigue: "
                   f"{'sí' if sigue else 'NO'} · momentos sin traducción {vacios} de {vistas} · "
                   f"líneas comprobadas leyéndolas {getattr(app.vivo, 'verificaciones', 0)}")
     captura("3_fondo_animado.png")
