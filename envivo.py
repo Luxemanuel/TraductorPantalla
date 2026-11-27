@@ -145,6 +145,45 @@ def cambio_local(h0, h1):
     return mayor
 
 
+def _caja_verif(caja, img):
+    x0, y0, x1, y1 = caja
+    m = max(6.0, 0.4 * (y1 - y0))
+    return (int(max(0, x0 - m)), int(max(0, y0 - m)), int(min(img.width, x1 + m)), int(min(img.height, y1 + m)))
+
+
+def fijar(l, img):
+    """Guarda los trazos de la línea (y la imagen de su sitio) tal como se ven en 'img'."""
+    l.huella = huella(img, l.caja)
+    l.huella_ext = huella(img, _caja_quieta(l.caja, img))
+    try:
+        l.recorte = img.crop(_caja_verif(l.caja, img))
+    except Exception:
+        l.recorte = None
+
+
+def otro_texto_estricto(ahora, antes):
+    """Dos lecturas del MISMO sitio con el mismo lector (antes y ahora). Otro texto si cambian los
+    números o alguna palabra; un símbolo que parpadea (▼, ◆, un cursor) no cuenta."""
+    import unicodedata
+    na, nb = _n(ahora), _n(antes)
+    if not na:
+        return False                      # no se leyó nada: no se da por cambiado
+    if not nb:
+        return True
+    cifras = lambda t: _re.sub(r"\D", "", unicodedata.normalize("NFKC", t))
+    if cifras(ahora) != cifras(antes):
+        return True
+    solo = lambda t: _re.sub(r"[\W_]+", "", t)            # sin signos ni símbolos
+    sa, sb = solo(na), solo(nb)
+    if not sa or not sb:
+        return sa != sb
+    r = _parecido(sa, sb)[0]
+    palabras = lambda t: sorted(w for w in _re.findall(r"[^\W\d_]{3,}", t.lower()))
+    if " " in ahora.strip() or " " in antes.strip():
+        return palabras(ahora) != palabras(antes) and r < 0.97
+    return r < 0.95
+
+
 def otro_texto(leido, conocido):
     """La comprobación de una línea dudosa: ¿lo leído ahora es claramente OTRO texto? Con un fondo
     que se mueve el lector se equivoca en alguna letra, así que solo cuenta como otro texto si
@@ -530,7 +569,7 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect", "recorte", "huella_ext")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
@@ -545,6 +584,8 @@ class Linea:
         self.candidato, self.conf_cand = None, 0
         self.nueva = True
         self.huella = None          # trazos de su sitio cuando se confirmó (ver huella())
+        self.recorte = None         # imagen de su sitio cuando se fijó (para comprobar si cambió)
+        self.huella_ext = None      # trazos de su sitio y un poco a la derecha (¿sigue escribiéndose?)
         self.huella_lect = None     # trazos cuando se leyó sin confirmar, y cuándo: si siguen
         self.t_lect = 0.0           # quietos un momento, se confirma sin volver a leer
 
@@ -1091,8 +1132,14 @@ class SesionEnVivo:
                 c = cambio_huella(l.huella, h)
                 cl = cambio_local(l.huella, h)
                 if c <= UMBRAL_HUELLA and cl <= UMBRAL_LOCAL:
+                    # igual por dentro; ¿apareció algo justo a su derecha o debajo (la frase sigue)?
+                    if l.huella_ext is not None:
+                        hx = huella(img, _caja_quieta(l.caja, img))
+                        if cambio_huella(l.huella_ext, hx) > 0.15:
+                            l.huella_ext = hx
+                            self._releer.append(_caja_quieta(l.caja, img))
                     continue
-                if (c >= UMBRAL_SEGURO or cl >= UMBRAL_LOCAL_SEGURO or h is None
+                if (c >= UMBRAL_SEGURO or h is None
                         or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum())):
                     cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
                 elif l.id not in self._verificando:
@@ -1137,7 +1184,7 @@ class SesionEnVivo:
             if (h is not None and h.sum() >= MIN_TRAZOS and cambio_huella(l.huella_lect, h) < 0.08
                     and cambio_local(l.huella_lect, h) < 0.3):
                 l.confirmada = True
-                l.huella = huella(img, l.caja)
+                fijar(l, img)
                 listas.append(l)
             l.huella_lect = None
         pend = [l for l in listas if self._pedidos.get(l.id) != l.texto]
@@ -1162,17 +1209,21 @@ class SesionEnVivo:
 
         def tarea():
             try:
+                def leer(im):
+                    return " ".join(p["t"] for p in motor.leer_parrafos(
+                        im, modo, omitir, seguir=lambda: self.activa, pista=self._pista))
                 for l in lineas:
-                    x0, y0, x1, y1 = l.caja
-                    m = max(6.0, 0.4 * (y1 - y0))
-                    caja = (int(max(0, x0 - m)), int(max(0, y0 - m)),
-                            int(min(img.width, x1 + m)), int(min(img.height, y1 + m)))
-                    pars = motor.leer_parrafos(img.crop(caja), modo, omitir, seguir=lambda: self.activa,
-                                               pista=self._pista)
-                    igual = not otro_texto(" ".join(p["t"] for p in pars), l.texto)
+                    caja = _caja_verif(l.caja, img)
+                    ahora_txt = leer(img.crop(caja))
+                    if l.recorte is not None and l.recorte.size == (caja[2] - caja[0], caja[3] - caja[1]):
+                        # el mismo lector sobre la imagen de entonces y la de ahora: solo cuenta lo
+                        # que cambia de verdad (un número, una palabra), no un adorno que parpadea
+                        igual = not otro_texto_estricto(ahora_txt, leer(l.recorte))
+                    else:
+                        igual = not otro_texto(ahora_txt, l.texto)
                     with self.cerrojo:
                         if igual:
-                            l.huella = huella(img, l.caja)   # el mismo texto: sus trazos de ahora
+                            fijar(l, img)                   # el mismo texto: sus trazos de ahora
                         else:
                             self._por_quitar.append(l)
                     self.verificaciones += 1
@@ -1346,7 +1397,7 @@ class SesionEnVivo:
                     for l in self.seguidor.lineas:
                         # los trazos de cada línea confirmada, tal como se ven en esta lectura
                         if l.confirmada and l.visto == ahora and not (l.trad and l.huella is not None):
-                            l.huella = huella(img, l.caja)
+                            fijar(l, img)
                         elif not l.confirmada and l.visto == ahora:
                             l.huella_lect, l.t_lect = huella(img, _caja_quieta(l.caja, img)), t_img
                     pend = [l for l in self.seguidor.pendientes() if self._pedidos.get(l.id) != l.texto]
