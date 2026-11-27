@@ -572,6 +572,14 @@ def _desplazar(p, dy):
     return q
 
 
+def _caja_quieta(caja, img):
+    """La caja de una línea y un poco más a su derecha y debajo: si se está escribiendo, lo nuevo
+    aparece ahí (fuera de la caja leída)."""
+    x0, y0, x1, y1 = caja
+    h = max(8, y1 - y0)
+    return (x0, y0, min(img.width, x1 + 3 * h), min(img.height, y1 + 0.5 * h))
+
+
 def en_franjas(caja, franjas):
     """¿La caja quedó entera dentro de lo leído? (None = se leyó toda la pantalla)"""
     return franjas is None or any(caja[1] >= y0 - 3 and caja[3] <= y1 + 3 for y0, y1 in franjas)
@@ -702,6 +710,8 @@ class Seguidor:
                     if l.idioma == p["idioma"] and _parecido(np_, k)[0] >= 0.9:
                         del self.recientes[k]
                         l.caja, l.filas, l.visto, l.fallos = p["caja"], p.get("filas"), ahora, 0
+                        if len(np_) > len(k):
+                            l.texto = p["t"]      # ahora se ve más completa: esa, y se retraduce
                         l.huella = None           # sus trazos se toman de nuevo en esta lectura
                         self.lineas.append(l)
                         vistas.add(l.id)
@@ -1124,11 +1134,11 @@ class SesionEnVivo:
         for l in self.seguidor.lineas:
             if l.confirmada or l.huella_lect is None or ahora - l.t_lect < QUIETA_SEG:
                 continue
-            h = huella(img, l.caja)
+            h = huella(img, _caja_quieta(l.caja, img))
             if (h is not None and h.sum() >= MIN_TRAZOS and cambio_huella(l.huella_lect, h) < 0.08
                     and cambio_local(l.huella_lect, h) < 0.3):
                 l.confirmada = True
-                l.huella = h
+                l.huella = huella(img, l.caja)
                 listas.append(l)
             l.huella_lect = None
         pend = [l for l in listas if self._pedidos.get(l.id) != l.texto]
@@ -1339,7 +1349,7 @@ class SesionEnVivo:
                         if l.confirmada and l.visto == ahora and not (l.trad and l.huella is not None):
                             l.huella = huella(img, l.caja)
                         elif not l.confirmada and l.visto == ahora:
-                            l.huella_lect, l.t_lect = huella(img, l.caja), t_img
+                            l.huella_lect, l.t_lect = huella(img, _caja_quieta(l.caja, img)), t_img
                     pend = [l for l in self.seguidor.pendientes() if self._pedidos.get(l.id) != l.texto]
                     for l in pend:
                         self._pedidos[l.id] = l.texto
