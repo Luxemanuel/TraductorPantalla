@@ -114,6 +114,51 @@ def huella(img, caja):
     return d > max(22, 0.45 * float(np.percentile(d, 99.5)))
 
 
+def paso_alto(img, caja, radio=1):
+    """Los detalles finos (trazos) de la caja, en color: la imagen menos su versión desenfocada.
+    En color porque hay texto que solo se distingue del fondo por el tono, no por la luz."""
+    import numpy as np
+    from PIL import ImageFilter
+    x0, y0, x1, y1 = (int(round(v)) for v in caja)
+    x0, y0 = max(0, x0 - 2), max(0, y0 - 2)
+    x1, y1 = min(img.width, x1 + 2), min(img.height, y1 + 2)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    g = img.crop((x0, y0, x1, y1)).convert("RGB")
+    return np.asarray(g, np.float32) - np.asarray(g.filter(ImageFilter.BoxBlur(radio)), np.float32)
+
+
+# Ajustados con el banco de pruebas (banco.py: miles de líneas con letras, tamaños, colores,
+# fondos animados, flechas que parpadean, cambios de una letra o de un número):
+SIGUE_IGUAL = 0.15      # diferencia máxima en un trozo del ancho de una letra para no hacer nada
+SE_FUE = 0.04           # energía de trazos que queda (ahora/antes) por debajo de la cual se fue
+
+
+def comparar_trazos(p0, p1, alto):
+    """(dif, energia): dif = la mayor diferencia normalizada en un trozo del ancho de una letra
+    (0 igual, 1 nada que ver, hasta 2 si se invierte); energia = trazos ahora / trazos antes."""
+    import numpy as np
+    if p0 is None or p1 is None or p0.shape != p1.shape:
+        return 2.0, 0.0
+    a2, b2, d2 = (p0 * p0).sum(axis=(0, 2)), (p1 * p1).sum(axis=(0, 2)), ((p0 - p1) ** 2).sum(axis=(0, 2))
+    n = p0.shape[0] * p0.shape[2]
+    e0, e1 = float(a2.sum()) / (n * len(a2)), float(b2.sum()) / (n * len(b2))
+    energia = e1 / max(e0, 1e-3)
+    w = max(5, int(alto * 0.45))
+    W = len(a2)
+    if W <= w:
+        tot = float(a2.sum() + b2.sum())
+        return (float(d2.sum()) / tot if tot > 0 else 0.0), energia
+    ca, cb, cd = (np.concatenate(([0.0], np.cumsum(v))) for v in (a2, b2, d2))
+    pos = np.array(list(range(0, W - w, max(2, w // 2))) + [W - w])
+    sa, sb, sd = ca[pos + w] - ca[pos], cb[pos + w] - cb[pos], cd[pos + w] - cd[pos]
+    ref = max(e0, e1, 1e-3)
+    con_tinta = np.maximum(sa, sb) / (n * w) >= 0.12 * ref         # los espacios no cuentan
+    if not con_tinta.any():
+        return 0.0, energia
+    return float((sd[con_tinta] / (sa[con_tinta] + sb[con_tinta])).max()), energia
+
+
 def cambio_huella(h0, h1):
     """0 = mismos trazos; 1 = nada que ver (otro texto, o ya no hay texto)."""
     if h0 is None or h1 is None or h0.shape != h1.shape:
@@ -154,6 +199,7 @@ def _caja_verif(caja, img):
 def fijar(l, img):
     """Guarda los trazos de la línea (y la imagen de su sitio) tal como se ven en 'img'."""
     l.huella = huella(img, l.caja)
+    l.trazos = paso_alto(img, l.caja)
     l.huella_ext = huella(img, _caja_quieta(l.caja, img))
     try:
         l.recorte = img.crop(_caja_verif(l.caja, img))
@@ -161,27 +207,34 @@ def fijar(l, img):
         l.recorte = None
 
 
-def otro_texto_estricto(ahora, antes):
-    """Dos lecturas del MISMO sitio con el mismo lector (antes y ahora). Otro texto si cambian los
-    números o alguna palabra; un símbolo que parpadea (▼, ◆, un cursor) no cuenta."""
+_PARECIDAS = str.maketrans({"I": "l", "|": "l", "!": "l", "í": "i", "O": "o"})
+
+
+def _palabras(t):
+    """Las palabras de un texto (letras y cifras), sin signos ni símbolos y con las letras que el
+    lector confunde entre sí unificadas (I/l, O/o)."""
     import unicodedata
-    na, nb = _n(ahora), _n(antes)
-    if not na:
-        return False                      # no se leyó nada: no se da por cambiado
-    if not nb:
+    t = unicodedata.normalize("NFKC", t).translate(_PARECIDAS).lower().replace("rn", "m")
+    return _re.findall(r"[^\W_]+", t)
+
+
+def otro_texto_estricto(ahora, antes, energia=1.0):
+    """Dos lecturas del MISMO sitio con el mismo lector (antes y ahora). ¿Es otro texto?
+    Cambia si cambia cualquier palabra o número; un símbolo que parpadea (▼, ◆, un cursor) no
+    cuenta. Si ahora no se lee nada: se fue si sus trazos también bajaron (energia < 0.6); si no,
+    el lector no pudo con esta imagen y no se da por cambiado."""
+    pa, pb = _palabras(ahora), _palabras(antes)
+    if not pa:
+        return bool(pb) and energia < 0.6
+    if not pb:
         return True
-    cifras = lambda t: _re.sub(r"\D", "", unicodedata.normalize("NFKC", t))
-    if cifras(ahora) != cifras(antes):
-        return True
-    solo = lambda t: _re.sub(r"[\W_]+", "", t)            # sin signos ni símbolos
-    sa, sb = solo(na), solo(nb)
-    if not sa or not sb:
-        return sa != sb
-    r = _parecido(sa, sb)[0]
-    palabras = lambda t: sorted(w for w in _re.findall(r"[^\W\d_]{3,}", t.lower()))
-    if " " in ahora.strip() or " " in antes.strip():
-        return palabras(ahora) != palabras(antes) and r < 0.97
-    return r < 0.95
+    if " " not in ahora.strip() and " " not in antes.strip() and len("".join(pa)) > 3:
+        # sin espacios (japonés, chino): por caracteres, tolerando uno suelto en frases largas
+        sa, sb = "".join(pa), "".join(pb)
+        if _re.sub(r"\D", "", sa) != _re.sub(r"\D", "", sb):
+            return True
+        return _parecido(sa, sb)[0] < (0.93 if min(len(sa), len(sb)) >= 12 else 0.99)
+    return pa != pb
 
 
 def otro_texto(leido, conocido):
@@ -197,15 +250,7 @@ def otro_texto(leido, conocido):
     return cifras(leido) != cifras(conocido) or _parecido(na, nb)[0] < 0.7
 
 
-# medido: fondo animado ~0.06 (hasta ~0.3 detrás de un cuadro casi transparente), texto resaltado
-# de otro color ~0.21, otra palabra ~0.5, otro texto ~0.4-0.9, sin texto 1.
-# Hasta UMBRAL_HUELLA: igual. Desde UMBRAL_SEGURO: otro texto seguro, se quita al momento.
-# Entre medias: se lee SOLO esa línea para saber si de verdad cambió (no parpadea por el fondo).
-UMBRAL_HUELLA = 0.30
-UMBRAL_SEGURO = 0.6
-UMBRAL_LOCAL = 0.5          # cambio en un trozo del ancho de una letra (ver cambio_local)
 QUIETA_SEG = 0.25           # una línea leída que no cambia en este tiempo ya no se está escribiendo
-UMBRAL_LOCAL_SEGURO = 0.8   # medido: otra palabra ~0.96, otro número ~0.85; fondo animado <= ~0.52
 
 
 # ============================================================================
@@ -569,7 +614,7 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect", "recorte", "huella_ext")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect", "recorte", "huella_ext", "trazos")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
@@ -586,6 +631,7 @@ class Linea:
         self.huella = None          # trazos de su sitio cuando se confirmó (ver huella())
         self.recorte = None         # imagen de su sitio cuando se fijó (para comprobar si cambió)
         self.huella_ext = None      # trazos de su sitio y un poco a la derecha (¿sigue escribiéndose?)
+        self.trazos = None          # detalles finos (paso_alto) de su sitio cuando se fijó
         self.huella_lect = None     # trazos cuando se leyó sin confirmar, y cuándo: si siguen
         self.t_lect = 0.0           # quietos un momento, se confirma sin volver a leer
 
@@ -702,7 +748,8 @@ class Seguidor:
     def fijas(self):
         """Líneas traducidas cuyo sitio se vigila por sus trazos: mientras no cambien, se quedan
         tal cual, lea lo que lea el lector (así una lectura con ruido no las hace parpadear)."""
-        return [l for l in self.lineas if l.trad and l.huella is not None and l.huella.sum() >= MIN_TRAZOS]
+        return [l for l in self.lineas if l.trad and l.huella is not None and l.trazos is not None
+                and l.huella.sum() >= MIN_TRAZOS]
 
     def quitar(self, lineas, ahora):
         for l in lineas:
@@ -1128,10 +1175,9 @@ class SesionEnVivo:
         with self.cerrojo:
             cambiadas, dudosas = [], []
             for l in self.seguidor.fijas():
-                h = huella(img, l.caja)
-                c = cambio_huella(l.huella, h)
-                cl = cambio_local(l.huella, h)
-                if c <= UMBRAL_HUELLA and cl <= UMBRAL_LOCAL:
+                p = paso_alto(img, l.caja)
+                dif, energia = comparar_trazos(l.trazos, p, l.caja[3] - l.caja[1])
+                if dif < SIGUE_IGUAL:
                     # igual por dentro; ¿apareció algo justo a su derecha o debajo (la frase sigue)?
                     if l.huella_ext is not None:
                         hx = huella(img, _caja_quieta(l.caja, img))
@@ -1139,10 +1185,12 @@ class SesionEnVivo:
                             l.huella_ext = hx
                             self._releer.append(_caja_quieta(l.caja, img))
                     continue
-                if (c >= UMBRAL_SEGURO or h is None
-                        or h.sum() < max(MIN_TRAZOS, 0.3 * l.huella.sum())):
-                    cambiadas.append(l)                  # otro texto, o ya no hay: fuera ya
+                if p is None or energia < SE_FUE:
+                    cambiadas.append(l)                  # ya no hay texto: fuera ya
                 elif l.id not in self._verificando:
+                    # cambió algo: se lee esa línea (ahora y como era) para saber si es otro
+                    # texto o solo una molestia (un adorno, un brillo, el fondo). La traducción
+                    # se queda mientras tanto: así no parpadea.
                     dudosas.append(l)
             self._confirmar_quietas(img)
             # las que se comprobaron leyéndolas y resultaron ser otro texto
@@ -1218,7 +1266,9 @@ class SesionEnVivo:
                     if l.recorte is not None and l.recorte.size == (caja[2] - caja[0], caja[3] - caja[1]):
                         # el mismo lector sobre la imagen de entonces y la de ahora: solo cuenta lo
                         # que cambia de verdad (un número, una palabra), no un adorno que parpadea
-                        igual = not otro_texto_estricto(ahora_txt, leer(l.recorte))
+                        energia = comparar_trazos(l.trazos, paso_alto(img, l.caja), l.caja[3] - l.caja[1])[1]
+                        igual = not (otro_texto_estricto(ahora_txt, leer(l.recorte), energia)
+                                     or otro_texto(ahora_txt, l.texto))
                     else:
                         igual = not otro_texto(ahora_txt, l.texto)
                     with self.cerrojo:

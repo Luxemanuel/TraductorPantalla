@@ -1497,6 +1497,8 @@ def autoprueba():
                 lineas.append(f"SIN INTERNET {origen}→es: FALLO {e}")
         ok_voz = autoprueba_voz(m, cfg, lineas)
         ok = ok_lector and ok_japones and ok_linea and ok_offline and ok_voz
+        if envivo.ES_WINDOWS:
+            ok = autoprueba_banco(m, lineas) and ok
         if ok and VIVO:
             ok = autoprueba_vivo(m, lineas)
         if ok and envivo.ES_WINDOWS:
@@ -1904,6 +1906,17 @@ def _escena_gacha(con_texto=True, fecha="2026-12-31 12:00"):
             d.text((54, 154 + i * 27), t, font=cuerpo, fill=(168, 168, 172))
         d.text((54, 270), "締切：" + fecha, font=cuerpo, fill=(220, 30, 30))
     return img
+
+
+def autoprueba_banco(m, lineas):
+    """Banco de decisiones en vivo con el lector de Windows: ¿cuántas veces se quedaría una
+    traducción vieja (desfase) o se quitaría una buena (parpadeo)?"""
+    import banco
+    t0 = time.time()
+    texto, desfase, parpadeo = banco.medir(m, n=int(os.environ.get("TRADUCTOR_BANCO", "500")))
+    lineas.append(texto + f"\n    ({time.time() - t0:.0f} s; letras {len(banco.fuentes()[0])} latinas, "
+                          f"{len(banco.fuentes()[1])} japonesas)")
+    return desfase <= 0.02 and parpadeo <= 0.02
 
 
 def autoprueba_estabilidad(m, lineas):
