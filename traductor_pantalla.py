@@ -2652,6 +2652,23 @@ def _prueba_texto_automatico(app, juego, lbl, bombear, captura, lineas):
     t0 = time.time()
     vuelve = bombear(5, lambda: ids_a and ids_a <= {i for i, a in en_pantalla().items() if a >= 255})
     lineas.append(f"La frase anterior vuelve: {'traducida a los %.2f s' % (time.time() - t0) if vuelve else 'NO volvió'}")
+    # una flecha que parpadea junto al texto (▼ de «siguiente»): la traducción no debe parpadear
+    def con_flecha(si):
+        im = _escena_prueba().convert("RGB")
+        if si:
+            ImageDraw.Draw(im).polygon([(540, 214), (556, 214), (548, 226)], fill=(240, 240, 255))
+        return im
+    t0, perdidas, prev = time.time(), 0, set(en_pantalla())
+    while time.time() - t0 < 4.0:
+        mostrar(con_flecha(int((time.time() - t0) / 0.5) % 2 == 0))
+        bombear(0.08)
+        ahora = set(en_pantalla())
+        perdidas += len(prev - ahora)
+        prev = ahora
+    ok_f = perdidas == 0
+    lineas.append(f"Flecha parpadeando 4 s junto al texto: {'OK' if ok_f else 'FALLO'} · traducciones "
+                  f"perdidas {perdidas} · comprobadas leyéndolas {getattr(app.vivo, 'verificaciones', 0)}")
+    ok = ok and ok_f
     # fondo que se mueve detrás del texto: la traducción no parpadea ni se vuelve a traducir
     t0, var, vacios, vistas = time.time(), 1, 0, 0
     while time.time() - t0 < 3.0:
