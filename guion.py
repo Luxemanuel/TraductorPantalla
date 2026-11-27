@@ -166,9 +166,29 @@ def frases_de_rpy(texto):
 # ============================================================================
 # archive.rpa
 # ============================================================================
+_PERMITIDOS = {("_codecs", "encode"), ("builtins", "bytes"), ("builtins", "bytearray"), ("builtins", "str"),
+               ("builtins", "int"), ("builtins", "set"), ("builtins", "frozenset"), ("__builtin__", "str"),
+               ("__builtin__", "unicode"), ("__builtin__", "long"), ("__builtin__", "bytearray"),
+               ("__builtin__", "set"), ("__builtin__", "frozenset"), ("__builtin__", "bytes"),
+               ("__builtin__", "int")}
+
+
+class _SoloDatos(pickle.Unpickler):
+    """El índice de un .rpa es un pickle: se lee permitiendo SOLO datos simples (texto, números,
+    bytes); cualquier otro objeto se rechaza, así un archivo manipulado no puede ejecutar nada."""
+
+    def find_class(self, module, name):
+        if (module, name) in _PERMITIDOS:
+            if module == "_codecs":
+                import _codecs
+                return _codecs.encode
+            import builtins
+            return getattr(builtins, {"unicode": "str", "long": "int"}.get(name, name))
+        raise pickle.UnpicklingError("contenido no permitido en el índice")
+
+
 def archivos_de_rpa(ruta, extensiones, tam_max=60 << 20):
     """[(nombre, bytes)] de los archivos con esas extensiones dentro de un .rpa."""
-    from estilo import _SoloDatos
     salida = []
     with open(ruta, "rb") as f:
         cab = f.readline(300).split()
