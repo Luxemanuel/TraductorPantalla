@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import marca
 
-FONDO = (18, 20, 26, 232)
+FONDO = (18, 20, 26, 247)          # casi opaco: el original no se trasluce
 BORDE = (255, 255, 255, 28)
 TEXTO = (246, 246, 242, 255)
 RELLENO = 4                     # margen dentro del cuadro
