@@ -100,6 +100,7 @@ jobs:
         env:
           ARGOS_PACKAGES_DIR: ""
           EASYOCR_MODULE_PATH: ""
+          TRADUCTOR_BANCO_DATOS: "1500"
         run: |
           $d = "dist\Traductor de Pantalla"
           $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -ArgumentList "--autoprueba" -Wait -PassThru
@@ -136,6 +137,7 @@ jobs:
             dist/Traductor de Pantalla/capturas_prueba/*.png
             dist/Traductor de Pantalla/autoprueba.txt
             dist/Traductor de Pantalla/registro.txt
+            banco_datos.jsonl
           if-no-files-found: ignore
 
       - name: Prueba de arranque (abrir la ventana 90 s)

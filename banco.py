@@ -240,3 +240,36 @@ def medir(motor, n=300, inicio=50000, ejemplos=12):
              f"parpadeos {np_} ({100 * np_ / max(1, tot['igual']):.2f}%) {dict(parp)} · "
              f"comprobadas leyendo {n_lect} ({1000 * t_lect / max(1, n_lect):.0f} ms cada una)")
     return "\n".join([texto] + malos[:ejemplos]), nd / max(1, tot["cambio"]), np_ / max(1, tot["igual"])
+
+
+def recolectar(motor, n=1500, inicio=60000, ruta="banco_datos.jsonl"):
+    """Datos para ajustar la comprobación leyendo: por cada caso, los rasgos de imagen y lo que
+    lee el lector real en dos recortes (justo y con más margen), antes y ahora. Una línea JSON
+    por caso en 'ruta'."""
+    import json
+    import time
+    import envivo
+    t0 = time.time()
+    salida = open(ruta, "w", encoding="utf-8")
+    print = lambda texto, flush=True: salida.write(texto + "\n")
+    for i in range(inicio, inicio + n):
+        try:
+            a, b, caja, etq, det, t1, t2 = caso(i)
+            h = envivo.huella(a, caja)
+            if h is None or h.sum() < envivo.MIN_TRAZOS:
+                continue
+            alto = caja[3] - caja[1]
+            dif, en = envivo.comparar_trazos(envivo.paso_alto(a, caja), envivo.paso_alto(b, caja), alto)
+            pista = None if t1.isascii() else "ja"
+            leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
+            m2 = max(12, int(1.2 * alto))
+            c2 = (max(0, caja[0] - m2), max(0, caja[1] - m2), min(a.width, caja[2] + m2), min(a.height, caja[3] + m2))
+            c1 = envivo._caja_verif(caja, a)
+            d = dict(i=i, e=etq, d=det, t1=t1, t2=t2, dif=round(dif, 4), en=round(en, 4), alto=alto,
+                     a1=leer(a.crop(c1)), b1=leer(b.crop(c1)), a2=leer(a.crop(c2)), b2=leer(b.crop(c2)))
+            print("BANCO_JSON " + json.dumps(d, ensure_ascii=True), flush=True)
+        except Exception as e:
+            print("BANCO_JSON " + json.dumps({"i": i, "error": str(e)}), flush=True)
+    print(f"BANCO_JSON_FIN {time.time() - t0:.0f} s", flush=True)
+    salida.close()
+    return time.time() - t0

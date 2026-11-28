@@ -1916,6 +1916,10 @@ def autoprueba_banco(m, lineas):
     texto, desfase, parpadeo = banco.medir(m, n=int(os.environ.get("TRADUCTOR_BANCO", "500")))
     lineas.append(texto + f"\n    ({time.time() - t0:.0f} s; letras {len(banco.fuentes()[0])} latinas, "
                           f"{len(banco.fuentes()[1])} japonesas)")
+    if os.environ.get("TRADUCTOR_BANCO_DATOS"):
+        ruta = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "banco_datos.jsonl")
+        dur = banco.recolectar(m, n=int(os.environ["TRADUCTOR_BANCO_DATOS"]), ruta=ruta)
+        lineas.append(f"Datos del banco recogidos en {dur:.0f} s: {ruta}")
     return desfase <= 0.02 and parpadeo <= 0.02
 
 
