@@ -308,7 +308,7 @@ def recolectar(motor, n=2000, inicio=80000, ruta="banco_datos.jsonl", k=5):
                 d[nom + "frac"] = round(float((ds >= envivo.SIGUE_IGUAL).mean()), 3)
                 d[nom + "pos"] = round(float(ps[int(np.argmax(ds))]), 3)
                 d[nom + "d2"] = round(float(np.sort(ds)[-2]) if len(ds) > 1 else 0.0, 4)
-            if d["fdif"] >= envivo.SIGUE_IGUAL and d["fen"] >= envivo.SE_FUE:
+            if True:
                 pista = None if t1.isascii() else "ja"
                 leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
                 m2 = max(12, int(1.2 * alto))
@@ -316,6 +316,9 @@ def recolectar(motor, n=2000, inicio=80000, ruta="banco_datos.jsonl", k=5):
                 c1 = envivo._caja_verif(caja, a)
                 for nom, im in (("a", a), ("f", cs[0]), ("m", m)):
                     d[nom + "1"], d[nom + "2"] = leer(im.crop(c1)), leer(im.crop(c2))
+                    if nom == "a":
+                        crudo = getattr(getattr(motor, "lector", None), "ultimo_crudo", None) or {}
+                        d["crudo"] = {c: [[l["t"], l["jp"]] for l in ls] for c, ls in crudo.items()}
             salida.write("BANCO_JSON " + json.dumps(d, ensure_ascii=True) + "\n")
         except Exception as e:
             salida.write("BANCO_JSON " + json.dumps({"i": i, "error": repr(e)}) + "\n")

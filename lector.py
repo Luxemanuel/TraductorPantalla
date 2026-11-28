@@ -168,6 +168,7 @@ class LectorWindows:
         res = self.hilo.ejecutar(self._reconocer(img, codigos))
         lineas = {c: self._lineas(r, escala, c) for c, r in res.items()}
         lineas = self._releer_letra_pequena(imagen, lineas, escala, lim)
+        self.ultimo_crudo = lineas            # lo que dio cada lector antes de combinar (banco.py)
         if pista == "ja" and modo == "auto":
             return self._combinar(lineas, "auto_ja")
         if modo == "auto" and "zh" in self.motores and "zh" not in lineas:
