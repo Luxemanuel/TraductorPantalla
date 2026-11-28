@@ -2825,8 +2825,9 @@ def autoprueba_vivo(m, lineas):
             if con:
                 with z.open(con[-1]["cuadro"]) as f:
                     Image.open(f).save(os.path.join(nucleo.BASE, "capturas_prueba", "0_grabar_prueba.jpg"))
-        ok_g = g.cuadros >= 3 and bool(con)
-        lineas.append(f"Grabar prueba: {'OK' if ok_g else 'FALLO'} · {g.cuadros} imágenes, "
+        # (imágenes iguales seguidas se guardan una sola vez: con la ventana quieta, puede haber 1)
+        ok_g = len(rot) >= 3 and g.cuadros >= 1 and bool(con)
+        lineas.append(f"Grabar prueba: {'OK' if ok_g else 'FALLO'} · {len(rot)} cuadros ({g.cuadros} imágenes distintas), "
                       f"{len(con)} con la traducción encima, {os.path.getsize(ruta) // 1000} KB")
         ok1 = ok1 and ok_g
     except Exception as e:
