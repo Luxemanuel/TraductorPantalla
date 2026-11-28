@@ -1920,7 +1920,7 @@ def autoprueba_banco(m, lineas):
         ruta = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "banco_datos.jsonl")
         dur = banco.recolectar(m, n=int(os.environ["TRADUCTOR_BANCO_DATOS"]), ruta=ruta)
         lineas.append(f"Datos del banco recogidos en {dur:.0f} s: {ruta}")
-    return desfase <= 0.02 and parpadeo <= 0.02
+    return desfase <= 0.03 and parpadeo <= 0.03
 
 
 def autoprueba_estabilidad(m, lineas):

@@ -213,38 +213,79 @@ def mediana(cuadros):
 
 
 def medir(motor, n=300, inicio=50000, ejemplos=12):
-    """La cadena completa de una línea fija, como en vivo: detector de trazos y, si duda,
-    comprobación leyendo (ahora y como era) con el lector real. Devuelve (texto del informe,
-    desfases, parpadeos). Desfase = cambió el texto y la traducción vieja se quedaría.
+    """La cadena completa de una línea fija, como en vivo (envivo.SesionEnVivo._dudar), con el
+    lector real: 1 s de fotogramas tras el cambio. Devuelve (informe, desfases, parpadeos).
+    Desfase = cambió el texto y la traducción vieja se quedaría.
     Parpadeo = mismo texto y la traducción se quitaría."""
     import collections
     import time
+    import comprobar
     import envivo
-    tot, desf, parp = collections.Counter(), collections.Counter(), collections.Counter()
-    decis = collections.Counter()
+    K, G = envivo.SIGUE_IGUAL, envivo.SE_FUE
+    tot, desf, parp, como_c = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter()
     malos, t_lect, n_lect = [], 0.0, 0
     for i in range(inicio, inicio + n):
-        a, b, caja, etq, det, t1, t2 = caso(i)
+        a, cs, caja, etq, det, t1, t2 = secuencia(i, 10)
         h = envivo.huella(a, caja)
         if h is None or h.sum() < envivo.MIN_TRAZOS:
             continue
         tot[etq] += 1
-        dif, en = envivo.comparar_trazos(envivo.paso_alto(a, caja), envivo.paso_alto(b, caja), caja[3] - caja[1])
-        if dif < envivo.SIGUE_IGUAL:
-            final, como = "mantener", "trazos"
-        elif en < envivo.SE_FUE:
-            final, como = "quitar", "trazos"
-        else:
-            cv = envivo._caja_verif(caja, a)
-            pista = None if t1.isascii() else "ja"
-            t0 = time.perf_counter()
-            leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
-            ahora, antes = leer(b.crop(cv)), leer(a.crop(cv))
-            t_lect += time.perf_counter() - t0
-            n_lect += 1
-            final = "quitar" if envivo.otro_texto_estricto(ahora, antes, en) else "mantener"
-            como = f"leyendo «{antes[:30]}» → «{ahora[:30]}»"
-        decis[(etq, final)] += 1
+        alto = caja[3] - caja[1]
+        pa = envivo.paso_alto(a, caja)
+        cv = envivo.caja_lectura(caja, a)
+        leido_ref = None
+        p0 = envivo.paso_alto(cs[0], caja)
+        dif, en = envivo.comparar_trazos(pa, p0, alto)
+        primero = envivo.rasgos_imagen(pa, p0, alto)
+        final, como = None, ""
+        if dif < K:
+            final, como = "mantener", "igual"
+        elif en < G:
+            final, como = "quitar", "se fue"
+        for j in range(1, 10):
+            if final:
+                break
+            dj, ej = envivo.comparar_trazos(pa, envivo.paso_alto(cs[j], caja), alto)
+            if dj < K:
+                final, como = "mantener", "vuelve"; break
+            if ej < G:
+                final, como = "quitar", "se fue"; break
+            if j < 2:
+                continue
+            med = envivo.mediana(cs[max(0, j - 4):j + 1])
+            pm = envivo.paso_alto(med, caja)
+            dm, em = envivo.comparar_trazos(pa, pm, alto)
+            if dm < K:
+                final, como = "mantener", "mediana"; break
+            if em < G:
+                final, como = "quitar", "se fue"; break
+            if j in (3, 9):
+                t0 = time.perf_counter()
+                pista = None if t1.isascii() else "ja"
+                leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im.crop(cv), "auto", True, pista=pista))
+                if leido_ref is None:
+                    leido_ref = leer(a)
+                ahora_txt = leer(med)
+                t_lect += time.perf_counter() - t0
+                n_lect += 1
+                modelo = comprobar.MODELOS.get("final" if j == 9 else "temprano")
+                img_ahora = envivo.rasgos_imagen(pa, pm, alto)
+                if comprobar.misma_lectura(leido_ref, ahora_txt) and not envivo.otro_texto_claro(ahora_txt, leido_ref):
+                    prob = 0.0
+                elif j != 9 and not envivo._palabras(ahora_txt) and img_ahora["en"] >= 0.6:
+                    prob = 0.5
+                elif modelo:
+                    prob = comprobar.predecir(modelo, comprobar.rasgos(leido_ref, ahora_txt, primero, img_ahora, not t1.isascii()))
+                else:
+                    prob = 1.0 if (envivo.otro_texto_estricto(ahora_txt, leido_ref, img_ahora["en"])
+                                   or envivo.otro_texto(ahora_txt, leido_ref)) else 0.0
+                como = f"leyendo «{leido_ref[:28]}» → «{ahora_txt[:28]}» p={prob:.2f}"
+                if prob >= comprobar.SEGURO_CAMBIO or (j == 9 and prob >= 0.5):
+                    final = "quitar"
+                elif prob <= comprobar.SEGURO_IGUAL or j == 9:
+                    final = "mantener"
+        final = final or "quitar"
+        como_c[(etq, como.split(" ")[0])] += 1
         if etq == "cambio" and final == "mantener":
             desf[det] += 1
             malos.append(f"    desfase #{i} {det}: {t1!r} → {t2!r} · {como}")
@@ -255,7 +296,7 @@ def medir(motor, n=300, inicio=50000, ejemplos=12):
     texto = (f"Banco de decisiones en vivo: {tot['cambio']} cambios, {tot['igual']} sin cambio · "
              f"desfases {nd} ({100 * nd / max(1, tot['cambio']):.2f}%) {dict(desf)} · "
              f"parpadeos {np_} ({100 * np_ / max(1, tot['igual']):.2f}%) {dict(parp)} · "
-             f"comprobadas leyendo {n_lect} ({1000 * t_lect / max(1, n_lect):.0f} ms cada una)")
+             f"lecturas {n_lect} ({1000 * t_lect / max(1, n_lect):.0f} ms) · modelo {'sí' if comprobar.MODELOS else 'no'}")
     return "\n".join([texto] + malos[:ejemplos]), nd / max(1, tot["cambio"]), np_ / max(1, tot["igual"])
 
 

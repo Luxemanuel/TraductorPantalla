@@ -134,29 +134,62 @@ SIGUE_IGUAL = 0.15      # diferencia máxima en un trozo del ancho de una letra 
 SE_FUE = 0.04           # energía de trazos que queda (ahora/antes) por debajo de la cual se fue
 
 
-def comparar_trazos(p0, p1, alto):
-    """(dif, energia): dif = la mayor diferencia normalizada en un trozo del ancho de una letra
-    (0 igual, 1 nada que ver, hasta 2 si se invierte); energia = trazos ahora / trazos antes."""
+def detalle_trozos(p0, p1, alto):
+    """(difs, posiciones 0..1) de cada trozo con tinta del ancho de una letra, y (e0, e1) la
+    energía media de los trazos antes y ahora."""
     import numpy as np
-    if p0 is None or p1 is None or p0.shape != p1.shape:
-        return 2.0, 0.0
     a2, b2, d2 = (p0 * p0).sum(axis=(0, 2)), (p1 * p1).sum(axis=(0, 2)), ((p0 - p1) ** 2).sum(axis=(0, 2))
     n = p0.shape[0] * p0.shape[2]
-    e0, e1 = float(a2.sum()) / (n * len(a2)), float(b2.sum()) / (n * len(b2))
-    energia = e1 / max(e0, 1e-3)
-    w = max(5, int(alto * 0.45))
     W = len(a2)
+    e0, e1 = float(a2.sum()) / (n * W), float(b2.sum()) / (n * W)
+    w = max(5, int(alto * 0.45))
     if W <= w:
         tot = float(a2.sum() + b2.sum())
-        return (float(d2.sum()) / tot if tot > 0 else 0.0), energia
+        return np.array([float(d2.sum()) / tot if tot > 0 else 0.0]), np.array([0.5]), (e0, e1)
     ca, cb, cd = (np.concatenate(([0.0], np.cumsum(v))) for v in (a2, b2, d2))
     pos = np.array(list(range(0, W - w, max(2, w // 2))) + [W - w])
     sa, sb, sd = ca[pos + w] - ca[pos], cb[pos + w] - cb[pos], cd[pos + w] - cd[pos]
     ref = max(e0, e1, 1e-3)
     con_tinta = np.maximum(sa, sb) / (n * w) >= 0.12 * ref         # los espacios no cuentan
     if not con_tinta.any():
-        return 0.0, energia
-    return float((sd[con_tinta] / (sa[con_tinta] + sb[con_tinta])).max()), energia
+        return np.array([0.0]), np.array([0.5]), (e0, e1)
+    return sd[con_tinta] / (sa[con_tinta] + sb[con_tinta]), (pos[con_tinta] + w / 2) / W, (e0, e1)
+
+
+def rasgos_imagen(p0, p1, alto):
+    """Rasgos de imagen para comprobar.rasgos (mismos nombres que comprobar.NOMBRES_IMAGEN)."""
+    import numpy as np
+    if p0 is None or p1 is None or p0.shape != p1.shape:
+        return dict(dif=2.0, en=0.0, n=1.0, frac=1.0, pos=0.5, d2=2.0)
+    ds, ps, (e0, e1) = detalle_trozos(p0, p1, alto)
+    return dict(dif=float(ds.max()), en=e1 / max(e0, 1e-3), n=float((ds >= SIGUE_IGUAL).sum()),
+                frac=float((ds >= SIGUE_IGUAL).mean()), pos=float(ps[int(np.argmax(ds))]),
+                d2=float(np.sort(ds)[-2]) if len(ds) > 1 else 0.0)
+
+
+def mediana(cuadros):
+    """El fotograma 'mediano' (píxel a píxel): lo pasajero (partículas, ruido, parpadeos cortos)
+    desaparece y lo que se queda (el texto) permanece."""
+    import numpy as np
+    from PIL import Image
+    return Image.fromarray(np.median(np.stack([np.asarray(c.convert("RGB")) for c in cuadros]), axis=0).astype(np.uint8))
+
+
+def caja_lectura(caja, img):
+    """El recorte para leer una línea al comprobarla: con margen (el lector acierta más)."""
+    alto = caja[3] - caja[1]
+    m = max(12, int(1.2 * alto))
+    return (int(max(0, caja[0] - m)), int(max(0, caja[1] - m)),
+            int(min(img.width, caja[2] + m)), int(min(img.height, caja[3] + m)))
+
+
+def comparar_trazos(p0, p1, alto):
+    """(dif, energia): dif = la mayor diferencia normalizada en un trozo del ancho de una letra
+    (0 igual, 1 nada que ver, hasta 2 si se invierte); energia = trazos ahora / trazos antes."""
+    if p0 is None or p1 is None or p0.shape != p1.shape:
+        return 2.0, 0.0
+    ds, _, (e0, e1) = detalle_trozos(p0, p1, alto)
+    return float(ds.max()), e1 / max(e0, 1e-3)
 
 
 def cambio_huella(h0, h1):
@@ -202,9 +235,11 @@ def fijar(l, img):
     l.trazos = paso_alto(img, l.caja)
     l.huella_ext = huella(img, _caja_quieta(l.caja, img))
     try:
-        l.recorte = img.crop(_caja_verif(l.caja, img))
+        l.recorte = img.crop(caja_lectura(l.caja, img))
     except Exception:
         l.recorte = None
+    l.leido_ref = None
+    l.duda = None
 
 
 _PARECIDAS = str.maketrans({"I": "l", "|": "l", "!": "l", "í": "i", "O": "o"})
@@ -235,6 +270,12 @@ def otro_texto_estricto(ahora, antes, energia=1.0):
             return True
         return _parecido(sa, sb)[0] < (0.93 if min(len(sa), len(sb)) >= 12 else 0.99)
     return pa != pb
+
+
+def otro_texto_claro(leido, conocido):
+    """Lo leído no se parece en nada a la frase conocida (los dos con cierta longitud)."""
+    a, b = "".join(_palabras(leido)), "".join(_palabras(conocido))
+    return len(a) >= 6 and len(b) >= 6 and _parecido(a, b)[0] < 0.5
 
 
 def otro_texto(leido, conocido):
@@ -614,7 +655,7 @@ def _n(t):
 
 class Linea:
     __slots__ = ("id", "texto", "idioma", "caja", "filas", "trad", "trad_de", "visto", "fallos",
-                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect", "recorte", "huella_ext", "trazos")
+                 "confirmada", "candidato", "conf_cand", "nueva", "creada", "huella", "huella_lect", "t_lect", "recorte", "huella_ext", "trazos", "leido_ref", "duda")
 
     def __init__(self, p, ahora):
         self.id = next(_contador)
@@ -632,6 +673,8 @@ class Linea:
         self.recorte = None         # imagen de su sitio cuando se fijó (para comprobar si cambió)
         self.huella_ext = None      # trazos de su sitio y un poco a la derecha (¿sigue escribiéndose?)
         self.trazos = None          # detalles finos (paso_alto) de su sitio cuando se fijó
+        self.leido_ref = None       # lo que lee el lector en 'recorte' (se lee una vez, si hace falta)
+        self.duda = None            # comprobación en curso (ver SesionEnVivo._dudar)
         self.huella_lect = None     # trazos cuando se leyó sin confirmar, y cuándo: si siguen
         self.t_lect = 0.0           # quietos un momento, se confirma sin volver a leer
 
@@ -1173,11 +1216,16 @@ class SesionEnVivo:
         if self.natural is not None and getattr(self.natural, "capturable", False):
             return False                       # la traducción sale en la captura: no se puede comparar
         with self.cerrojo:
-            cambiadas, dudosas = [], []
+            cambiadas = []
+            ahora_t = time.time()
             for l in self.seguidor.fijas():
+                if l.duda is not None and l.duda.get("mismo_texto"):
+                    fijar(l, img)                        # el mismo texto: su apariencia de ahora
+                    continue
                 p = paso_alto(img, l.caja)
                 dif, energia = comparar_trazos(l.trazos, p, l.caja[3] - l.caja[1])
                 if dif < SIGUE_IGUAL:
+                    l.duda = None
                     # igual por dentro; ¿apareció algo justo a su derecha o debajo (la frase sigue)?
                     if l.huella_ext is not None:
                         hx = huella(img, _caja_quieta(l.caja, img))
@@ -1187,17 +1235,12 @@ class SesionEnVivo:
                     continue
                 if p is None or energia < SE_FUE:
                     cambiadas.append(l)                  # ya no hay texto: fuera ya
-                elif l.id not in self._verificando:
-                    # cambió algo: se lee esa línea (ahora y como era) para saber si es otro
-                    # texto o solo una molestia (un adorno, un brillo, el fondo). La traducción
-                    # se queda mientras tanto: así no parpadea.
-                    dudosas.append(l)
+                else:
+                    self._dudar(l, img, p, ahora_t, cambiadas)
             self._confirmar_quietas(img)
             # las que se comprobaron leyéndolas y resultaron ser otro texto
             cambiadas += [l for l in self._por_quitar if l in self.seguidor.lineas and l not in cambiadas]
             self._por_quitar = []
-            if dudosas:
-                self._verificar(img, dudosas)
             if not cambiadas:
                 return False
             ahora = time.time()
@@ -1247,42 +1290,88 @@ class SesionEnVivo:
         self.eventos.append((time.time(), que, [l.texto[:14] for l in lineas]))
         del self.eventos[:-60]
 
-    def _verificar(self, img, lineas):
-        """Lee solo esas líneas (un recorte pequeño, muy rápido) para saber si su texto sigue
-        siendo el mismo. Mientras tanto la traducción se queda."""
-        ids = {l.id for l in lineas}
-        self._verificando |= ids
+    def _dudar(self, l, img, p, ahora, cambiadas):
+        """Una línea fija cuyo sitio cambió de forma dudosa. La traducción se queda mientras se
+        mira durante hasta 1 s (ajustado con el banco de pruebas):
+        - si vuelve a verse como antes, o la mediana de los últimos fotogramas sí, era una
+          molestia pasajera (flecha o cursor que parpadea, brillo, partículas, ruido);
+        - si el texto se va, se quita ya;
+        - a los 0,3 s y al segundo se lee la línea (como era y la mediana de ahora) y decide el
+          modelo de comprobar.py: otro texto, o el mismo con otra apariencia."""
+        alto = l.caja[3] - l.caja[1]
+        d = l.duda
+        if d is None:
+            d = l.duda = {"t0": ahora, "cv": caja_lectura(l.caja, img), "cuadros": [], "fase": 0,
+                          "leyendo": False, "primero": rasgos_imagen(l.trazos, p, alto)}
+        cv = d["cv"]
+        if cv[2] > img.width or cv[3] > img.height:
+            l.duda = None
+            return
+        d["cuadros"].append(img.crop(cv))
+        del d["cuadros"][:-5]
+        t = ahora - d["t0"]
+        if len(d["cuadros"]) < 3:
+            return
+        med = mediana(d["cuadros"])
+        rel = (l.caja[0] - cv[0], l.caja[1] - cv[1], l.caja[2] - cv[0], l.caja[3] - cv[1])
+        pm = paso_alto(med, rel)
+        dm, em = comparar_trazos(l.trazos, pm, alto)
+        if dm < SIGUE_IGUAL:
+            l.duda = None                              # molestia pasajera: sigue igual
+            return
+        if em < SE_FUE:
+            cambiadas.append(l)                        # se fue
+            self._evento("duda: se fue", [l])
+            return
+        if not d["leyendo"] and ((d["fase"] == 0 and t >= 0.2) or (d["fase"] == 1 and t >= 1.0)):
+            d["leyendo"] = True
+            self._comprobar_leyendo(l, d, med, rasgos_imagen(l.trazos, pm, alto), d["fase"] == 1)
+            d["fase"] += 1
+        elif t > 3.0 and not d["leyendo"]:
+            cambiadas.append(l)                        # distinto tanto tiempo: otro texto
+            self._evento("duda: 3 s distinto", [l])
+
+    def _comprobar_leyendo(self, l, d, med, img_ahora, final):
         motor, cfg = self.app.motor, self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
 
+        def leer(im):
+            return " ".join(p["t"] for p in motor.leer_parrafos(
+                im, modo, omitir, seguir=lambda: self.activa, pista=self._pista))
+
         def tarea():
             try:
-                def leer(im):
-                    return " ".join(p["t"] for p in motor.leer_parrafos(
-                        im, modo, omitir, seguir=lambda: self.activa, pista=self._pista))
-                for l in lineas:
-                    caja = _caja_verif(l.caja, img)
-                    ahora_txt = leer(img.crop(caja))
-                    if l.recorte is not None and l.recorte.size == (caja[2] - caja[0], caja[3] - caja[1]):
-                        # el mismo lector sobre la imagen de entonces y la de ahora: solo cuenta lo
-                        # que cambia de verdad (un número, una palabra), no un adorno que parpadea
-                        energia = comparar_trazos(l.trazos, paso_alto(img, l.caja), l.caja[3] - l.caja[1])[1]
-                        igual = not (otro_texto_estricto(ahora_txt, leer(l.recorte), energia)
-                                     or otro_texto(ahora_txt, l.texto))
-                    else:
-                        igual = not otro_texto(ahora_txt, l.texto)
-                    with self.cerrojo:
-                        if igual:
-                            fijar(l, img)                   # el mismo texto: sus trazos de ahora
-                        else:
-                            self._por_quitar.append(l)
+                import comprobar
+                if l.leido_ref is None and l.recorte is not None:
+                    l.leido_ref = leer(l.recorte)
+                ahora_txt = leer(med)
+                antes_txt = l.leido_ref if l.leido_ref is not None else l.texto
+                modelo = comprobar.MODELOS.get("final" if final else "temprano")
+                if comprobar.misma_lectura(antes_txt, ahora_txt) and not otro_texto_claro(ahora_txt, l.texto):
+                    prob = 0.0
+                elif not final and not _palabras(ahora_txt) and img_ahora["en"] >= 0.6:
+                    prob = 0.5                              # no se pudo leer y los trazos siguen: esperar
+                elif modelo:
+                    x = comprobar.rasgos(antes_txt, ahora_txt, d["primero"], img_ahora, l.idioma in ("ja", "zh"))
+                    prob = comprobar.predecir(modelo, x)
+                else:
+                    prob = 1.0 if (otro_texto_estricto(ahora_txt, antes_txt, img_ahora["en"])
+                                   or otro_texto(ahora_txt, l.texto)) else 0.0
+                with self.cerrojo:
+                    if l.duda is not d:
+                        return                           # ya se resolvió por otro lado
+                    if prob >= comprobar.SEGURO_CAMBIO or (final and prob >= 0.5):
+                        self._por_quitar.append(l)
+                        self.eventos.append((time.time(), f"duda: otro texto p={prob:.2f} «{antes_txt[:20]}»→«{ahora_txt[:20]}»", []))
+                    elif prob <= comprobar.SEGURO_IGUAL or final:
+                        d["mismo_texto"] = True           # mismo texto con otra apariencia
                     self.verificaciones += 1
             except Cancelado:
                 pass
             except Exception:
                 log_limitado("verificar", "Comprobando una línea")
             finally:
-                self._verificando -= ids
+                d["leyendo"] = False
         threading.Thread(target=tarea, daemon=True).start()
 
     def _decidir_lectura(self, img, peq):
