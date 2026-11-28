@@ -100,7 +100,7 @@ jobs:
         env:
           ARGOS_PACKAGES_DIR: ""
           EASYOCR_MODULE_PATH: ""
-          TRADUCTOR_BANCO_DATOS: "2500"
+          TRADUCTOR_BANCO_DATOS: "3000"
         run: |
           $d = "dist\Traductor de Pantalla"
           $p = Start-Process -FilePath "$d\Traductor de Pantalla.exe" -ArgumentList "--autoprueba" -Wait -PassThru

@@ -52,6 +52,26 @@ def instalar_lectores_windows(idiomas=None):
     return ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", args, None, 1) > 32
 
 
+_LATINA = re.compile(r"[A-Za-z]")
+
+
+def parece_ingles(linea_ja, lineas_en):
+    """¿Esta línea que el lector japonés cree japonesa es en realidad texto latino mal leído?
+    (el lector japonés suele «inventar» algún kanji o ー en texto inglés). Ajustado con el banco
+    de pruebas (2311 líneas leídas por Windows): japonés solo si la lectura japonesa casi no tiene
+    letras latinas (≤7 %) y la lectura inglesa de ese sitio no parece inglés (≤35 % de vocales).
+    Errores de idioma: de 534 a 15."""
+    en = [l for l in lineas_en if _solapa(l, linea_ja)]
+    if not en:
+        return False
+    tj = re.sub(r"\s", "", linea_ja["t"])
+    latinas_ja = len(_LATINA.findall(tj)) / max(1, len(tj))
+    te = " ".join(l["t"] for l in en)
+    letras = _LATINA.findall(te)
+    vocales = sum(c in "aeiouAEIOU" for c in letras) / max(1, len(letras))
+    return not (latinas_ja <= 0.07 and vocales <= 0.35)
+
+
 def _solapa(a, b):
     """True si dos cajas comparten buena parte de su área."""
     ix = min(a["x1"], b["x1"]) - max(a["x0"], b["x0"])
@@ -172,7 +192,7 @@ class LectorWindows:
         if pista == "ja" and modo == "auto":
             return self._combinar(lineas, "auto_ja")
         if modo == "auto" and "zh" in self.motores and "zh" not in lineas:
-            cjk = [l["t"] for l in lineas.get("ja", []) if l["jp"]]
+            cjk = [l["t"] for l in lineas.get("ja", []) if l["jp"] and not parece_ingles(l, lineas.get("en", []))]
             if cjk and proporcion_kana(cjk) < 0.08:          # ideogramas sin kana: ¿chino?
                 lineas["zh"] = self._lineas(self.hilo.ejecutar(self._reconocer(img, ["zh"]))["zh"], escala, "zh")
         return self._combinar(lineas, modo)
@@ -210,6 +230,8 @@ class LectorWindows:
 
     def _combinar(self, lineas, modo):
         ja = [l for l in lineas.get("ja", []) if l["jp"]]
+        if modo != "ja":
+            ja = [l for l in ja if not parece_ingles(l, lineas.get("en", []))]
         zh = [l for l in lineas.get("zh", []) if l["jp"]]
         if modo == "ja":
             return [dict(l, idi="ja") for l in ja]

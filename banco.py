@@ -280,13 +280,28 @@ def trozos(p0, p1, alto):
     return sd[t] / (sa[t] + sb[t]), (pos[t] + w / 2) / W
 
 
-def recolectar(motor, n=2000, inicio=80000, ruta="banco_datos.jsonl", k=5):
-    """Datos para ajustar la comprobación: por cada caso, rasgos de imagen del primer fotograma
-    tras el cambio y de la mediana de k fotogramas, y lo que lee el lector real (recorte justo y
-    amplio) en la imagen de antes, en el primer fotograma y en la mediana."""
+def rasgos_imagen(pa, im, caja, prefijo):
+    """Rasgos de imagen de 'im' frente a la referencia (paso alto 'pa') en la caja."""
+    import envivo
+    alto = caja[3] - caja[1]
+    pb = envivo.paso_alto(im, caja)
+    dif, en = envivo.comparar_trazos(pa, pb, alto)
+    ds, ps = trozos(pa, pb, alto)
+    k = envivo.SIGUE_IGUAL
+    return {prefijo + "dif": dif, prefijo + "en": en, prefijo + "n": float((ds >= k).sum()),
+            prefijo + "frac": float((ds >= k).mean()), prefijo + "pos": float(ps[int(np.argmax(ds))]),
+            prefijo + "d2": float(np.sort(ds)[-2]) if len(ds) > 1 else 0.0}
+
+
+def recolectar(motor, n=2500, inicio=100000, ruta="banco_datos.jsonl", k=10):
+    """Datos para ajustar la comprobación, como funciona en vivo: 10 fotogramas (1 s) tras el
+    cambio. Si en ese segundo vuelve a verse igual que antes (o lo hace la mediana de los últimos
+    fotogramas), se resuelve sin leer. Si no, lo que lee el lector real (recorte amplio) en la
+    imagen de antes, en la mediana de los 3 primeros fotogramas y en la de los 10."""
     import json
     import time
     import envivo
+    K, G = envivo.SIGUE_IGUAL, envivo.SE_FUE
     t0 = time.time()
     salida = open(ruta, "w", encoding="utf-8")
     for i in range(inicio, inicio + n):
@@ -297,30 +312,42 @@ def recolectar(motor, n=2000, inicio=80000, ruta="banco_datos.jsonl", k=5):
                 continue
             alto = caja[3] - caja[1]
             pa = envivo.paso_alto(a, caja)
-            m = mediana(cs)
-            d = dict(i=i, e=etq, d=det, t1=t1, t2=t2, alto=alto)
-            for nom, im in (("f", cs[0]), ("m", m)):
-                pb = envivo.paso_alto(im, caja)
-                dif, en = envivo.comparar_trazos(pa, pb, alto)
-                ds, ps = trozos(pa, pb, alto)
-                d[nom + "dif"], d[nom + "en"] = round(dif, 4), round(en, 4)
-                d[nom + "n"] = int((ds >= envivo.SIGUE_IGUAL).sum())
-                d[nom + "frac"] = round(float((ds >= envivo.SIGUE_IGUAL).mean()), 3)
-                d[nom + "pos"] = round(float(ps[int(np.argmax(ds))]), 3)
-                d[nom + "d2"] = round(float(np.sort(ds)[-2]) if len(ds) > 1 else 0.0, 4)
-            if True:
+            d = dict(i=i, e=etq, d=det, t1=t1, t2=t2, alto=alto, cjk=float(not t1.isascii()))
+            d.update(rasgos_imagen(pa, cs[0], caja, "f"))
+            resuelto = None
+            if d["fdif"] < K:
+                resuelto = "igual"
+            elif d["fen"] < G:
+                resuelto = "se fue"
+            else:
+                for j in range(1, k):
+                    dj, ej = envivo.comparar_trazos(pa, envivo.paso_alto(cs[j], caja), alto)
+                    if dj < K:
+                        resuelto = "vuelve"; break
+                    if ej < G:
+                        resuelto = "se fue"; break
+                    if j >= 2:
+                        dm, em = envivo.comparar_trazos(pa, envivo.paso_alto(mediana(cs[max(0, j - 4):j + 1]), caja), alto)
+                        if dm < K:
+                            resuelto = "mediana"; break
+            d["resuelto"] = resuelto
+            if resuelto is None:
+                m3, m10 = mediana(cs[:3]), mediana(cs[-5:])
+                d.update(rasgos_imagen(pa, m3, caja, "m"))
+                d.update(rasgos_imagen(pa, m10, caja, "u"))
                 pista = None if t1.isascii() else "ja"
-                leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
-                m2 = max(12, int(1.2 * alto))
-                c2 = (max(0, caja[0] - m2), max(0, caja[1] - m2), min(a.width, caja[2] + m2), min(a.height, caja[3] + m2))
-                c1 = envivo._caja_verif(caja, a)
-                for nom, im in (("a", a), ("f", cs[0]), ("m", m)):
-                    d[nom + "1"], d[nom + "2"] = leer(im.crop(c1)), leer(im.crop(c2))
-                    if nom == "a":
-                        crudo = getattr(getattr(motor, "lector", None), "ultimo_crudo", None) or {}
-                        d["crudo"] = {c: [[l["t"], l["jp"]] for l in ls] for c, ls in crudo.items()}
+                cv = caja_lectura(caja, a)
+                leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im.crop(cv), "auto", True, pista=pista))
+                d["ra"], d["rm"], d["ru"] = leer(a), leer(m3), leer(m10)
             salida.write("BANCO_JSON " + json.dumps(d, ensure_ascii=True) + "\n")
         except Exception as e:
             salida.write("BANCO_JSON " + json.dumps({"i": i, "error": repr(e)}) + "\n")
     salida.close()
     return time.time() - t0
+
+
+def caja_lectura(caja, img):
+    """El recorte para leer una línea al comprobarla: con margen (el lector acierta más)."""
+    alto = caja[3] - caja[1]
+    m = max(12, int(1.2 * alto))
+    return (max(0, caja[0] - m), max(0, caja[1] - m), min(img.width, caja[2] + m), min(img.height, caja[3] + m))
