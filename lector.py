@@ -58,21 +58,17 @@ _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]")
 
 def parece_ingles(linea_ja, lineas_en):
     """¿Esta línea que el lector japonés cree japonesa es en realidad texto latino mal leído?
-    (el lector japonés suele «inventar» algún kanji o ー en texto inglés). Ajustado con el banco
-    de pruebas (2311 líneas leídas por Windows): japonés solo si la lectura japonesa casi no tiene
-    letras latinas (≤7 %) y la lectura inglesa de ese sitio no parece inglés (≤35 % de vocales).
-    Errores de idioma: de 534 a 15."""
+    (el lector japonés «inventa» algún kanji o ー en texto inglés). Ajustado con el banco de
+    pruebas (1552 casos leídos por Windows, con inglés, japonés y chino): es CJK solo si casi
+    todas sus letras son CJK (≥95 %) y hay al menos 0,65 caracteres CJK por cada letra que leyó
+    el lector inglés en ese sitio. Errores: 36 (la regla anterior, 50; la primera, 534)."""
     en = [l for l in lineas_en if _solapa(l, linea_ja)]
     if not en:
         return False
     tj = re.sub(r"\s", "", linea_ja["t"])
-    latinas_ja = len(_LATINA.findall(tj)) / max(1, len(tj))
-    te = " ".join(l["t"] for l in en)
-    letras = _LATINA.findall(te)
-    vocales = sum(c in "aeiouAEIOU" for c in letras) / max(1, len(letras))
-    if latinas_ja <= 0.07 and len(_CJK.findall(tj)) >= 4 and len(_CJK.findall(tj)) >= 0.7 * len(letras):
-        return False       # muchos caracteres CJK y la lectura inglesa es corta: texto CJK (p. ej. chino)
-    return not (latinas_ja <= 0.07 and vocales <= 0.35)
+    nc, nl = len(_CJK.findall(tj)), len(_LATINA.findall(tj))
+    letras_en = len(_LATINA.findall(" ".join(l["t"] for l in en)))
+    return not (nc / max(1, nc + nl) >= 0.95 and nc / max(1, letras_en) > 0.65)
 
 
 def _solapa(a, b):
@@ -201,34 +197,47 @@ class LectorWindows:
         return self._combinar(lineas, modo)
 
     def _releer_letra_pequena(self, imagen, lineas, escala, lim):
-        """Letra pequeña (menos de ~22 px), sobre todo japonés y chino, se lee mal a tamaño
-        normal. Segunda pasada: solo la zona donde hay texto, ampliada 2-3 veces. Se queda con
-        cada lectura donde la segunda encontró al menos lo mismo."""
+        """La letra pequeña se lee mal a tamaño normal. Medido con el banco de pruebas y el lector
+        de Windows (2900 líneas): con renglones de hasta ~13 px, leer ampliado ×3 sube el acierto
+        de 0,56 a 0,66 en inglés y de 0,37 a 0,51 en chino; con 14-18 px, ×2 (0,65 → 0,69, y
+        respeta más los espacios); con letra mayor no mejora. Segunda pasada solo en las zonas
+        con letra pequeña (aunque en la pantalla haya también letra grande)."""
         todas = [l for ls in lineas.values() for l in ls]
-        if not todas:
+        if not todas or not getattr(self, "segunda_pasada", True):
             return lineas
-        altos = sorted(l["y1"] - l["y0"] for l in todas)
-        alto = altos[len(altos) // 2]
-        if not getattr(self, "segunda_pasada", True) or alto * escala >= 22 or alto < 5:
+        pequenas = [l for l in todas if 5 <= l["y1"] - l["y0"] <= 18]
+        if not pequenas:
             return lineas
         m = 14
-        x0 = max(0, int(min(l["x0"] for l in todas)) - m)
-        y0 = max(0, int(min(l["y0"] for l in todas)) - m)
-        x1 = min(imagen.width, int(max(l["x1"] for l in todas)) + m)
-        y1 = min(imagen.height, int(max(l["y1"] for l in todas)) + m)
-        f = min(3.0, 30.0 / alto, lim / max(1, x1 - x0, y1 - y0))
-        if f < 1.4 * escala:
-            return lineas
-        zona = imagen.convert("RGBA").crop((x0, y0, x1, y1))
-        zona = zona.resize((int(zona.width * f), int(zona.height * f)), Image.LANCZOS)
-        res = self.hilo.ejecutar(self._reconocer(zona, list(lineas)))
-        salida = {}
-        for c, r in res.items():
-            nuevas = [dict(l, x0=l["x0"] + x0, x1=l["x1"] + x0, y0=l["y0"] + y0, y1=l["y1"] + y0)
-                      for l in self._lineas(r, f, c)]
-            antes = sum(len(l["t"]) for l in lineas[c])
-            ahora = sum(len(l["t"]) for l in nuevas)
-            salida[c] = nuevas if ahora >= 0.8 * antes else lineas[c]
+        zonas = []
+        for l in sorted(pequenas, key=lambda l: (l["y0"], l["x0"])):
+            r = [l["x0"] - m, l["y0"] - m, l["x1"] + m, l["y1"] + m, [l["y1"] - l["y0"]]]
+            for z in zonas:
+                if r[0] < z[2] and z[0] < r[2] and r[1] < z[3] and z[1] < r[3]:
+                    z[0], z[1], z[2], z[3] = min(z[0], r[0]), min(z[1], r[1]), max(z[2], r[2]), max(z[3], r[3])
+                    z[4] += r[4]
+                    break
+            else:
+                zonas.append(r)
+        zonas = sorted(zonas, key=lambda z: -(z[2] - z[0]) * (z[3] - z[1]))[:6]
+        salida = {c: list(ls) for c, ls in lineas.items()}
+        for x0, y0, x1, y1, altos in zonas:
+            x0, y0 = max(0, int(x0)), max(0, int(y0))
+            x1, y1 = min(imagen.width, int(x1)), min(imagen.height, int(y1))
+            alto = sorted(altos)[len(altos) // 2]
+            f = min(3.0 if alto <= 13 else 2.0, lim / max(1, x1 - x0, y1 - y0))   # escala total
+            if f < 1.4 * escala or x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            zona = imagen.convert("RGBA").crop((x0, y0, x1, y1))
+            zona = zona.resize((int(zona.width * f), int(zona.height * f)), Image.LANCZOS)
+            res = self.hilo.ejecutar(self._reconocer(zona, list(lineas)))
+            dentro = lambda l: x0 <= (l["x0"] + l["x1"]) / 2 <= x1 and y0 <= (l["y0"] + l["y1"]) / 2 <= y1
+            for c, r in res.items():
+                nuevas = [dict(l, x0=l["x0"] + x0, x1=l["x1"] + x0, y0=l["y0"] + y0, y1=l["y1"] + y0)
+                          for l in self._lineas(r, f, c)]
+                viejas = [l for l in salida.get(c, []) if dentro(l)]
+                if sum(len(l["t"]) for l in nuevas) >= 0.6 * sum(len(l["t"]) for l in viejas):
+                    salida[c] = [l for l in salida.get(c, []) if not dentro(l)] + nuevas
         return salida
 
     def _combinar(self, lineas, modo):
