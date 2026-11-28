@@ -1015,6 +1015,12 @@ class SesionEnVivo:
         self._cola_trad = queue.Queue()
         self._nuevos = []                     # líneas recién traducidas (historial y voz)
         self.repintar = False                 # llegaron traducciones: componer aunque nada cambie
+        self._pintando = False                # componiendo aparte (mientras el lector está ocupado)
+        self._seq_comp = 0                    # cada composición lleva su número: la más vieja
+        self._seq_lectura = 0                 # nunca tapa a otra más reciente
+        self._seq_aplicada = 0
+        self._verif_activa = False            # hay una comprobación leyendo (una a la vez)
+        self._lectura_principal = False       # la lectura de texto nuevo está en marcha
         self.activa = True
         self.procesando = False
         self.ref = None
@@ -1254,11 +1260,16 @@ class SesionEnVivo:
                 self._peq_anterior = peq_ahora
                 self._revisar_fijas(img)
                 capturable = self.natural is not None and getattr(self.natural, "capturable", False)
+                if self.procesando and self.repintar and not self._pintando and self.pintor is not None:
+                    self._pintar_aparte(img)      # llegaron traducciones: no esperar a que acabe la lectura
                 if not self.procesando and not capturable:   # con la traducción en la captura no se lee
                     # 2) Leer solo las franjas donde algo cambió FUERA de lo ya traducido (texto
                     #    nuevo, o algo que se fue). Lo traducido y quieto no se vuelve a leer, y una
                     #    zona que cambia no toca a las demás.
                     self._decidir_lectura(img, miniatura(img))
+                g = getattr(self.app, "grabadora", None)
+                if g is not None:                 # «Grabar prueba»: la captura con los rótulos encima
+                    g.cuadro(img, self)
         except Exception:
             log_limitado("tick", "Bucle en vivo")
         if self.activa:
@@ -1356,7 +1367,7 @@ class SesionEnVivo:
 
     def _evento(self, que, lineas):
         """Registro de tiempos (para medir cuánto tarda cada paso)."""
-        self.eventos.append((time.time(), que, [l.texto[:14] for l in lineas]))
+        self.eventos.append((time.time(), que, [l.texto[:40] for l in lineas]))
         del self.eventos[:-60]
 
     def _dudar(self, l, img, p, ahora, cambiadas):
@@ -1392,27 +1403,102 @@ class SesionEnVivo:
             cambiadas.append(l)                        # se fue
             self._evento("duda: se fue", [l])
             return
-        if not d["leyendo"] and ((d["fase"] == 0 and t >= 0.2) or (d["fase"] == 1 and t >= 1.0)):
-            d["leyendo"] = True
+        if t > 3.0:
+            # distinto tanto tiempo: otro texto (aunque la lectura de comprobación no haya
+            # terminado: con el lector ocupado, la traducción vieja no debe quedarse encima)
+            cambiadas.append(l)
+            l.duda = None
+            self._evento("duda: 3 s distinto", [l])
+        elif not d["leyendo"] and not self._verif_activa and \
+                ((d["fase"] == 0 and t >= 0.2) or (d["fase"] == 1 and t >= 1.0)):
+            d["leyendo"] = True                        # (una comprobación a la vez: no atascar el lector)
             self._comprobar_leyendo(l, d, med, rasgos_imagen(l.trazos, pm, alto), d["fase"] == 1)
             d["fase"] += 1
-        elif t > 3.0 and not d["leyendo"]:
-            cambiadas.append(l)                        # distinto tanto tiempo: otro texto
-            self._evento("duda: 3 s distinto", [l])
+
+    def _resolver_dudas(self, pars, leidas, img, t_img):
+        """Las líneas en duda cuyo sitio se acaba de leer (lectura normal de texto nuevo) se
+        deciden con esa lectura, sin esperar a su propia comprobación: cuando cambia una lista
+        entera (otra página, desplazarse) las comprobaciones de una en una tardaban segundos.
+        Decide el mismo modelo de comprobar.py. Llamar con self.cerrojo."""
+        import comprobar
+        modelo = comprobar.MODELOS.get("temprano")
+        for l in self.seguidor.fijas():
+            d = l.duda
+            if d is None or d.get("mismo_texto") or t_img < d["t0"] + 0.15 or not en_franjas(l.caja, leidas):
+                continue
+            alto = max(1, l.caja[3] - l.caja[1])
+            ahora_txt = " ".join(p["t"] for p in pars
+                                 if min(p["caja"][3], l.caja[3]) - max(p["caja"][1], l.caja[1])
+                                 >= 0.5 * min(alto, max(1, p["caja"][3] - p["caja"][1]))
+                                 and min(p["caja"][2], l.caja[2]) - max(p["caja"][0], l.caja[0]) > 0)
+            antes_txt = l.leido_ref if l.leido_ref is not None else l.texto
+            if comprobar.misma_lectura(antes_txt, ahora_txt) and not otro_texto_claro(ahora_txt, l.texto):
+                d["mismo_texto"] = True
+                continue
+            if not _palabras(ahora_txt):
+                # ahí ya no se lee nada (antes sí). Una vez puede ser algo que pasa por delante;
+                # dos lecturas vacías separadas y una duda de casi un segundo: el texto se fue
+                # (p. ej. otra pantalla con un dibujo en ese sitio)
+                if _palabras(antes_txt):
+                    vacias = d.setdefault("vacias", [])
+                    vacias.append(t_img)
+                    if len(vacias) >= 2 and vacias[-1] - vacias[0] >= 0.4 and t_img - d["t0"] >= 0.8:
+                        self.seguidor.quitar([l], time.time())
+                        l.duda = None
+                        self.eventos.append((time.time(), f"duda: ya no se lee nada «{antes_txt[:20]}»", []))
+                continue
+            if not modelo:
+                continue
+            p_now = paso_alto(img, l.caja)
+            if p_now is None:
+                continue
+            x = comprobar.rasgos(antes_txt, ahora_txt, d["primero"], rasgos_imagen(l.trazos, p_now, alto),
+                                 l.idioma in ("ja", "zh"))
+            prob = comprobar.predecir(modelo, x)
+            if prob >= comprobar.SEGURO_CAMBIO:
+                # fuera ya: así esta misma lectura trae el texto nuevo de ese sitio (su rótulo
+                # viejo desaparece al pintar el resultado)
+                self.seguidor.quitar([l], time.time())
+                l.duda = None
+                self.eventos.append((time.time(), f"duda resuelta leyendo p={prob:.2f} «{antes_txt[:20]}»→«{ahora_txt[:20]}»", []))
 
     def _comprobar_leyendo(self, l, d, med, img_ahora, final):
         motor, cfg = self.app.motor, self.app.cfg
         modo, omitir = cfg["idioma_origen"], cfg["omitir_espanol"]
 
+        cv = d["cv"]
+        rel = (l.caja[0] - cv[0], l.caja[1] - cv[1], l.caja[2] - cv[0], l.caja[3] - cv[1])
+
         def leer(im):
-            return " ".join(p["t"] for p in motor.leer_parrafos(
-                im, modo, omitir, seguir=lambda: self.activa, pista=self._pista))
+            # la lectura principal tiene preferencia (es la que trae el texto nuevo)
+            espera = time.time()
+            while self._lectura_principal and time.time() - espera < 2.0 and self.activa:
+                time.sleep(0.02)
+            ps = motor.leer_parrafos(im, modo, omitir, seguir=lambda: self.activa, pista=self._pista)
+            # solo lo que está en el sitio de la línea: el recorte lleva margen y un texto vecino
+            # (p. ej. el mismo botón de la pantalla nueva, un poco más arriba) no debe contar
+            # como «sigue el mismo texto»
+            alto = max(1, rel[3] - rel[1])
+            return " ".join(p["t"] for p in ps
+                            if min(p["caja"][3], rel[3]) - max(p["caja"][1], rel[1])
+                            >= 0.5 * min(alto, max(1, p["caja"][3] - p["caja"][1]))
+                            and min(p["caja"][2], rel[2]) - max(p["caja"][0], rel[0]) > 0)
+
+        def vigente():
+            return self.activa and l.duda is d and l in self.seguidor.lineas
 
         def tarea():
+            self._verif_activa = True
             try:
                 import comprobar
+                # mientras esperaba su turno para leer, la línea pudo quitarse por otro lado (la
+                # pantalla cambió): entonces no se lee, que el lector quede libre para lo nuevo
+                if not vigente():
+                    return
                 if l.leido_ref is None and l.recorte is not None:
                     l.leido_ref = leer(l.recorte)
+                if not vigente():
+                    return
                 ahora_txt = leer(med)
                 antes_txt = l.leido_ref if l.leido_ref is not None else l.texto
                 modelo = comprobar.MODELOS.get("final" if final else "temprano")
@@ -1432,6 +1518,13 @@ class SesionEnVivo:
                     if prob >= comprobar.SEGURO_CAMBIO or (final and prob >= 0.5):
                         self._por_quitar.append(l)
                         self.eventos.append((time.time(), f"duda: otro texto p={prob:.2f} «{antes_txt[:20]}»→«{ahora_txt[:20]}»", []))
+                    elif (prob <= comprobar.SEGURO_IGUAL or final) and not _palabras(ahora_txt) \
+                            and _palabras(antes_txt):
+                        # ahí ya no se lee nada (antes sí): no se da por «el mismo texto» (se
+                        # quedaría para siempre encima de otra cosa, p. ej. un dibujo de la
+                        # pantalla nueva). Sigue en duda: si el texto vuelve a verse se queda;
+                        # si no, a los 3 s se quita.
+                        d["sin_leer"] = True
                     elif prob <= comprobar.SEGURO_IGUAL or final:
                         d["mismo_texto"] = True           # mismo texto con otra apariencia
                     self.verificaciones += 1
@@ -1441,6 +1534,7 @@ class SesionEnVivo:
                 log_limitado("verificar", "Comprobando una línea")
             finally:
                 d["leyendo"] = False
+                self._verif_activa = False
         threading.Thread(target=tarea, daemon=True).start()
 
     def _decidir_lectura(self, img, peq):
@@ -1462,6 +1556,13 @@ class SesionEnVivo:
         for l in self.seguidor.lineas:
             esperando = not l.confirmada and l.huella_lect is not None   # se confirma por sus trazos
             if l.fallos > 0 or l.candidato or (not l.confirmada and not esperando and ahora - l.creada < 3.0):
+                franjas.append((l.caja[1], l.caja[3]))
+            d = l.duda
+            if d is not None and not d.get("mismo_texto") and ahora - d["t0"] >= 0.2 and d.get("leida", 0) < 3:
+                # traducción en duda (su sitio cambió): leer ya ese sitio con todo lo demás. Si son
+                # varias a la vez (una lista que cambia entera), una sola lectura las decide todas
+                # (ver _resolver_dudas) en vez de comprobarlas de una en una.
+                d["leida"] = d.get("leida", 0) + 1
                 franjas.append((l.caja[1], l.caja[3]))
         if not franjas:
             if self.repintar or (self.pintor is not None and self.pintor.pendiente):
@@ -1575,6 +1676,7 @@ class SesionEnVivo:
 
         def tarea():
             t0 = time.perf_counter()
+            self._lectura_principal = bool(franjas or franjas is None)
             try:
                 if franjas is None:
                     pars, leidas = motor.leer_parrafos(img, modo, omitir, seguir=lambda: self.activa), None
@@ -1585,6 +1687,7 @@ class SesionEnVivo:
                     pars, leidas = self._leer_franjas(motor, img, franjas, modo, omitir)
                 else:
                     pars, leidas = [], []
+                self._lectura_principal = False
                 if self.guion is not None and pars:        # Ren'Py: la frase exacta del guion
                     pars = self.guion.corregir(pars)
                 t1 = time.perf_counter()
@@ -1595,6 +1698,7 @@ class SesionEnVivo:
                                                        for c, t in self._invalidadas)]
                     ahora = time.time()
                     if leidas != []:
+                        self._resolver_dudas(pars, leidas, img, t_img)
                         self.seguidor.actualizar(pars, ahora, leidas)
                         self.eventos.append((ahora, f"leído en {t1 - t0:.2f}" if leidas else f"leído todo en {t1 - t0:.2f}",
                                              [p["t"][:14] for p in pars]))
@@ -1617,6 +1721,8 @@ class SesionEnVivo:
                     vis = self.seguidor.visibles(dx, dy)
                     traducidas = [l for l in self.seguidor.lineas if l.trad]
                     nuevas, self._nuevos = self._nuevos, []
+                    self._seq_comp += 1
+                    self._seq_lectura = self._seq_comp
                 ids_nuevas = {l.id for l in nuevas}
                 nuevos = [b for b in vis if b["id"] in ids_nuevas]
                 motor.tiempos = (t1 - t0, motor.tiempos[1])
@@ -1644,10 +1750,53 @@ class SesionEnVivo:
                 self.app.cola.put(("vivo", (self, vis, nuevos, time.perf_counter() - t0, piezas)))
             except Cancelado:
                 self.procesando = False
+                self._lectura_principal = False
             except Exception as e:
+                self._lectura_principal = False
                 log_limitado("lectura", "Lectura en vivo")
                 self.app.cola.put(("vivo_error", (self, str(e))))
         threading.Thread(target=tarea, daemon=True).start()
+
+    def _pintar_aparte(self, img):
+        """Compone y pinta las traducciones que acaban de llegar mientras el lector sigue ocupado
+        con otra lectura (antes esperaban a que terminase: hasta un par de segundos de más)."""
+        self._pintando = True
+        self.repintar = False
+        pintor = self.pintor
+
+        def tarea():
+            try:
+                with self.cerrojo:
+                    traducidas = [l for l in self.seguidor.lineas if l.trad]
+                    otras = list(self._otras)
+                    dx, dy = (self.caja[0], self.caja[1]) if self.caja else (0, 0)
+                    vis = self.seguidor.visibles(dx, dy)
+                    self._seq_comp += 1
+                    seq = self._seq_comp
+                piezas = pintor.componer(img, traducidas, otras)
+                self.app.cola.put(("llamar", lambda: self._aplicar_piezas(piezas, vis, seq)))
+            except Exception:
+                log_limitado("componer", "Componiendo la traducción natural")
+                self._pintando = False
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _aplicar_piezas(self, piezas, vis, seq):
+        self._pintando = False
+        if not self.activa or self.natural is None:
+            return
+        if seq < self._seq_aplicada:          # ya se pintó algo más reciente
+            self.repintar = True
+            return
+        self._seq_aplicada = seq
+        self.natural.actualizar(self._solo_vigentes(piezas), self.origen())
+        self._evento("pintado aparte", [])
+        self.bloques = vis
+
+    def _solo_vigentes(self, piezas):
+        """Sin las piezas de líneas que se quitaron mientras se componían (no deben volver)."""
+        with self.cerrojo:
+            ids = {l.id for l in self.seguidor.lineas}
+        return [p for p in piezas if all(i in ids for i in p["ids"])]
 
     def resultado(self, bloques, nuevos, duracion, piezas=None):
         """Llamado en el hilo de la interfaz con las líneas que siguen visibles."""
@@ -1657,7 +1806,14 @@ class SesionEnVivo:
         self.ultima_duracion = duracion
         self.lecturas += 1
         if self.natural is not None and piezas is not None:
-            self.natural.actualizar(piezas, self.origen())
+            if self._seq_lectura < self._seq_aplicada:
+                # mientras se componía, se pintó aparte algo más reciente (una traducción que
+                # llegó): esta composición vieja lo quitaría; se compone de nuevo
+                self.repintar = True
+                self.bloques = bloques
+                return nuevos
+            self._seq_aplicada = self._seq_lectura
+            self.natural.actualizar(self._solo_vigentes(piezas), self.origen())
             self._evento("pintado", [])
             self.bloques = bloques
             return nuevos

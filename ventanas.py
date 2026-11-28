@@ -1221,6 +1221,14 @@ HISTORIAL
 VENTANA PRINCIPAL · "Última traducción"
   Copiar, Leer en voz alta o Ver texto (panel) de lo último traducido.
 
+GRABAR PRUEBA (para revisar errores)
+  Las grabaciones de Windows no muestran la traducción (así el traductor
+  puede seguir leyendo lo que hay debajo). «Grabar prueba» sí: guarda lo
+  que ve el traductor con los rótulos encima, y lo que fue haciendo, en un
+  .zip dentro de Vídeos\\Traductor de Pantalla - pruebas. Púlsalo, traduce
+  como siempre y detén la traducción ({at['detener']}) para guardarlo.
+  Graba como mucho 5 minutos.
+
 TRADUCCIÓN FIJA (solo Mac/Linux, donde no existe el modo en vivo)
   Esc o clic       Cerrar
   Espacio          Alternar entre traducción y texto original

@@ -6,6 +6,7 @@ mismo sitio da exactamente la misma imagen, así que no se vuelve a subir ni par
 """
 import functools
 import os
+import re
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -23,6 +24,42 @@ _POR_IDIOMA = {
     "th": ["leelawui.ttf", "tahoma.ttf"], "ko": ["malgun.ttf", "gulim.ttc"],
     "zh": ["msyh.ttc", "simsun.ttc"], "ja": ["YuGothM.ttc", "meiryo.ttc", "msgothic.ttc"],
 }
+
+
+_SIN_ESPACIOS = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0e00-\u0e7f]")   # escrituras sin espacios
+
+# símbolos frecuentes en los juegos que la letra incluida no tiene (saldrían como □)
+_SUSTITUTOS = {"→": "›", "⇒": "›", "➔": "›", "➜": "›", "▶": "›", "►": "›", "▷": "›", "←": "‹", "⇐": "‹",
+               "◀": "‹", "◄": "‹", "◁": "‹", "↑": "^", "↓": "v", "★": "*", "☆": "*", "✦": "*", "✧": "*",
+               "●": "•", "○": "•", "◆": "•", "◇": "•", "■": "•", "□": "•", "※": "*", "～": "~", "〜": "~"}
+
+
+@functools.lru_cache(maxsize=4096)
+def _tiene(ch, idioma):
+    """¿La letra de los rótulos tiene este carácter? (si no, se dibuja un □)"""
+    if ch.isspace():
+        return True
+    f = fuente(40, idioma)
+    try:
+        m = f.getmask(ch)
+        vacio = f.getmask("\uffff")
+        return not (m.size == vacio.size and bytes(m) == bytes(vacio))
+    except Exception:
+        return True
+
+
+def limpiar(texto, idioma="es"):
+    """La traducción sin caracteres que la letra no puede dibujar."""
+    out, cambio = [], False
+    for ch in texto:
+        if _tiene(ch, idioma):
+            out.append(ch)
+            continue
+        cambio = True
+        if ch in _SUSTITUTOS and _tiene(_SUSTITUTOS[ch], idioma):
+            out.append(_SUSTITUTOS[ch])
+    limpio = " ".join("".join(out).split())
+    return limpio if cambio and limpio else texto
 
 
 @functools.lru_cache(maxsize=96)
@@ -62,9 +99,15 @@ def _largo(f, t):
 
 
 def _envolver(texto, f, ancho):
-    """Reparte en líneas de hasta 'ancho'. Sin espacios (chino, japonés…): por caracteres."""
-    trozos = texto.split() if " " in texto.strip() else list(texto.strip())
-    sep = " " if " " in texto.strip() else ""
+    """Reparte en líneas de hasta 'ancho'. Sin espacios (chino, japonés…): por caracteres. Una
+    sola palabra de letras latinas no se parte nunca («Archi-vos» en dos renglones no se lee)."""
+    t = texto.strip()
+    if " " in t:
+        trozos, sep = t.split(), " "
+    elif _SIN_ESPACIOS.search(t):
+        trozos, sep = list(t), ""
+    else:
+        trozos, sep = [t], ""
     esp = _largo(f, sep) if sep else 0.0
     lineas, actual, largo = [], [], 0.0
     for p in trozos:
@@ -165,7 +208,7 @@ class Rotulador:
             libre = (min(debajo) if debajo else H) - y1
             paso = max(alto_fila * 1.25, (y1 - y0) / max(1, filas))
             filas_max = filas + max(0, min(3, int(libre // paso)))
-            px, estrecha, ls = maquetar(l.trad.strip(), ancho, round(alto_fila), filas, filas_max,
+            px, estrecha, ls = maquetar(limpiar(l.trad.strip(), self.idioma), ancho, round(alto_fila), filas, filas_max,
                                         self.idioma, max_ancho)
             im = dibujar(ls, px, estrecha, self.idioma, ancho + 2 * RELLENO, (y1 - y0) + 2 * RELLENO)
             x, y = x0 - RELLENO, y0 - RELLENO

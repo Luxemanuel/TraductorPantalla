@@ -6,6 +6,7 @@ Captura la pantalla (o una zona), reconoce el texto (OCR), lo traduce sin
 internet (glosario propio + Argos Translate) y lo muestra encima de las
 palabras o en un panel de texto.  Abre la Ayuda del programa para ver todo.
 """
+import json
 import os
 import queue
 import socket
@@ -67,6 +68,7 @@ class App:
         self.ultimo_estilo = "palabras"
         self._estilo_zona = "palabras"
         self.vivo = None              # sesión de traducción en vivo activa
+        self.grabadora = None         # «Grabar prueba» en curso
         self.listo = False
         self.ocupado = False
         self.trabajo = 0              # identifica cada traducción (para poder cancelar)
@@ -251,6 +253,11 @@ class App:
             b = ttk.Button(ult, text=texto, command=fn, style="Enlace.TButton", width=0)
             b.pack(side="left")
             self.botones_ultima.append(b)
+        if VIVO:
+            # «Grabar prueba»: las grabaciones de Windows no muestran la traducción; esta sí
+            self.btn_grabar = ttk.Button(ult, text="Grabar prueba", command=self.grabar_prueba,
+                                         style="Enlace.TButton", width=0)
+            self.btn_grabar.pack(side="right")
 
         # ---- pie: herramientas y estado ----
         ttk.Frame(f, style="Linea2.TFrame", height=1).pack(fill="x", pady=(4, 6))
@@ -735,6 +742,64 @@ class App:
             except tk.TclError:
                 pass
 
+    # ---------- «Grabar prueba» ----------
+    def grabar_prueba(self):
+        """Empieza o termina una grabación de prueba: lo que ve el traductor con sus traducciones
+        encima (las grabaciones normales de Windows no las muestran), para revisar errores."""
+        if self.grabadora is not None:
+            self.terminar_prueba()
+            return
+        import grabadora
+        try:
+            self.grabadora = grabadora.Grabadora()
+        except Exception as e:
+            log.exception("Grabar prueba")
+            self.estado(f"No se pudo empezar a grabar: {e}", error=True)
+            return
+        self.btn_grabar.configure(text="● Terminar grabación")
+        cuando = "ya" if self.vivo is not None else "en cuanto empieces a traducir en vivo"
+        self.estado(f"● Grabando la prueba ({cuando}). Juega como siempre; al detener la traducción "
+                    f"({atajo_legible(self.cfg['atajos']['detener'])}) se guarda. Máximo 5 minutos.")
+        self.root.after(1000, self._vigilar_prueba)
+
+    def _vigilar_prueba(self):
+        g = self.grabadora
+        if g is None:
+            return
+        if g.fuera_de_tiempo():
+            self.terminar_prueba()
+            return
+        self.root.after(1000, self._vigilar_prueba)
+
+    def terminar_prueba(self):
+        g, self.grabadora = self.grabadora, None
+        if g is None:
+            return
+        try:
+            self.btn_grabar.configure(text="Grabar prueba")
+        except (tk.TclError, AttributeError):
+            pass
+        import version
+        info = {"version": version.VERSION, "pantalla": [self.root.winfo_screenwidth(), self.root.winfo_screenheight()],
+                "idioma_origen": self.cfg.get("idioma_origen"), "idioma_destino": self.cfg.get("idioma_destino"),
+                "lector": getattr(getattr(self.motor, "lector", None), "nombre", None)}
+        ruta = g.terminar(info)
+        if not g.cuadros:
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
+            self.estado("Grabación de prueba terminada sin imágenes: no hubo traducción en vivo mientras grababa.")
+            return
+        mb = os.path.getsize(ruta) / 1e6
+        self.estado(f"Prueba guardada ({g.segundos():.0f} s, {mb:.0f} MB): {ruta}")
+        if sys.platform.startswith("win"):
+            try:
+                import subprocess
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(ruta)])
+            except Exception:
+                pass
+
     def detener_vivo(self):
         if self.vivo is not None:
             self.vivo.detener()
@@ -1022,6 +1087,8 @@ class App:
             self.trabajo += 1
             self.voz.detener()
             self.estado("Traducción en vivo detenida.")
+            if self.grabadora is not None:
+                self.terminar_prueba()
             return
         algo = self.ocupado or self.selector or self._overlay_abierto() or self.voz.hablando()
         self.trabajo += 1           # cualquier traducción en curso queda descartada
@@ -2744,6 +2811,27 @@ def autoprueba_vivo(m, lineas):
     ok1 = ok1 and not propio
     lineas.append(f"Traducción inicial: {'OK' if ok1 else 'FALLO'} en {time.time() - t0:.1f} s  "
                   f"{[b['traduccion'] for b in (app.vivo.bloques if app.vivo else [])]}")
+    # «Grabar prueba»: el .zip debe tener las capturas con la traducción pegada encima
+    try:
+        import grabadora
+        import zipfile
+        app.grabadora = grabadora.Grabadora(os.path.join(nucleo.BASE, "capturas_prueba"))
+        bombear(2.5)
+        g, app.grabadora = app.grabadora, None
+        ruta = g.terminar({"prueba": True})
+        with zipfile.ZipFile(ruta) as z:
+            rot = [json.loads(x) for x in z.read("rotulos.jsonl").decode("utf-8").splitlines() if x]
+            con = [r for r in rot if any("welcome" in (x["texto"] or "").lower() and x["trad"] for x in r["rotulos"])]
+            if con:
+                with z.open(con[-1]["cuadro"]) as f:
+                    Image.open(f).save(os.path.join(nucleo.BASE, "capturas_prueba", "0_grabar_prueba.jpg"))
+        ok_g = g.cuadros >= 3 and bool(con)
+        lineas.append(f"Grabar prueba: {'OK' if ok_g else 'FALLO'} · {g.cuadros} imágenes, "
+                      f"{len(con)} con la traducción encima, {os.path.getsize(ruta) // 1000} KB")
+        ok1 = ok1 and ok_g
+    except Exception as e:
+        lineas.append(f"Grabar prueba: FALLO ({e})")
+        ok1 = False
     v = app.vivo
     lineas.append(f"Capa traspasable: {v.capa.traspasable if v else None} · "
                   f"excluida de capturas: {v.capa.excluida if v else None}")

@@ -63,7 +63,7 @@ jobs:
             --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 `
             --hidden-import pystray._win32 --hidden-import brotli `
             --hidden-import actualizar --hidden-import subtitulos_voz --hidden-import lector `
-            --hidden-import traduccion --hidden-import version --hidden-import rotulos --hidden-import banco --hidden-import comprobar `
+            --hidden-import traduccion --hidden-import version --hidden-import rotulos --hidden-import banco --hidden-import comprobar --hidden-import grabadora `
             --hidden-import capa_natural --hidden-import tema --hidden-import bandeja `
             --hidden-import marca --hidden-import marca_datos --hidden-import atajos --hidden-import guion `
             @extra lanzador.py
