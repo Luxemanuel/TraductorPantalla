@@ -175,6 +175,53 @@ def mediana(cuadros):
     return Image.fromarray(np.median(np.stack([np.asarray(c.convert("RGB")) for c in cuadros]), axis=0).astype(np.uint8))
 
 
+def buscar_movida(img, caja, trazos, alto):
+    """¿Se movió el texto? Busca sus mismos trazos cerca (una lista que se desplaza, un panel
+    que se abre, una burbuja que sigue a un personaje). Devuelve la caja nueva o None."""
+    import numpy as np
+    if trazos is None:
+        return None
+    t = trazos.mean(axis=2)
+    th, tw = t.shape
+    if th < 6 or tw < 8:
+        return None
+    x0, y0, x1, y1 = caja
+    mx, my = max(40, int(0.5 * (x1 - x0))), max(40, int(3 * alto))
+    zona = (int(max(0, x0 - 2 - mx)), int(max(0, y0 - 2 - my)), int(min(img.width, x1 + 2 + mx)),
+            int(min(img.height, y1 + 2 + my)))
+    if zona[2] - zona[0] < tw or zona[3] - zona[1] < th:
+        return None
+    from PIL import ImageFilter
+    g = img.crop(zona).convert("RGB")
+    z = (np.asarray(g, np.float32) - np.asarray(g.filter(ImageFilter.BoxBlur(1)), np.float32)).mean(axis=2)
+    H, W = z.shape
+    # correlación normalizada por FFT
+    tt = t - t.mean()
+    nt = float(np.sqrt((tt * tt).sum()))
+    if nt < 1e-3:
+        return None
+    F = np.fft.rfft2(z, (H, W))
+    corr = np.fft.irfft2(F * np.conj(np.fft.rfft2(tt, (H, W))), (H, W))[:H - th + 1, :W - tw + 1]
+    c1 = np.cumsum(np.cumsum(np.pad(z, ((1, 0), (1, 0))), 0), 1)
+    c2 = np.cumsum(np.cumsum(np.pad(z * z, ((1, 0), (1, 0))), 0), 1)
+    suma = lambda c: c[th:, tw:] - c[:-th, tw:] - c[th:, :-tw] + c[:-th, :-tw]
+    s1, s2 = suma(c1)[:H - th + 1, :W - tw + 1], suma(c2)[:H - th + 1, :W - tw + 1]
+    var = np.maximum(s2 - s1 * s1 / (th * tw), 1e-3)
+    ncc = corr / (np.sqrt(var) * nt)
+    yy, xx = np.unravel_index(int(np.argmax(ncc)), ncc.shape)
+    if ncc[yy, xx] < 0.8:
+        return None
+    dx = int(zona[0] + xx - max(0, int(round(x0)) - 2))     # mismo origen que paso_alto()
+    dy = int(zona[1] + yy - max(0, int(round(y0)) - 2))
+    if abs(dx) < 2 and abs(dy) < 2:
+        return None
+    nueva = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+    if nueva[0] < 0 or nueva[1] < 0 or nueva[2] > img.width or nueva[3] > img.height:
+        return None
+    dif, _ = comparar_trazos(trazos, paso_alto(img, nueva), alto)
+    return nueva if dif < SIGUE_IGUAL * 2 else None
+
+
 def caja_lectura(caja, img):
     """El recorte para leer una línea al comprobarla: con margen (el lector acierta más)."""
     alto = caja[3] - caja[1]
@@ -977,6 +1024,8 @@ class SesionEnVivo:
         self._verificando = set()             # líneas que se están comprobando leyéndolas
         self._por_quitar = []                 # comprobadas: era otro texto
         self._releer = []                     # sitios de traducciones quitadas: leerlos ya
+        self._peq_anterior = None
+        self._escena_nueva = 0.0
         self.eventos = []
         self.verificaciones = 0
         self._pista = None                    # "ja"/"zh": idioma del juego, visto en una lectura completa
@@ -1198,6 +1247,11 @@ class SesionEnVivo:
                 if time.time() - self._ultima_captura > 0.25:
                     self.eventos.append((time.time(), f"captura lenta {time.time() - self._ultima_captura:.2f}", []))
                 # 1) ¿Siguen igual los trazos de lo ya traducido? Si no, se quita al momento.
+                peq_ahora = miniatura(img)
+                if self._peq_anterior is not None and self._peq_anterior.size == peq_ahora.size \
+                        and diferencia(peq_ahora, self._peq_anterior) > 0.35:
+                    self._escena_nueva = time.time()      # otra pantalla (menú, carga, escena)
+                self._peq_anterior = peq_ahora
                 self._revisar_fijas(img)
                 capturable = self.natural is not None and getattr(self.natural, "capturable", False)
                 if not self.procesando and not capturable:   # con la traducción en la captura no se lee
@@ -1224,6 +1278,21 @@ class SesionEnVivo:
                     continue
                 p = paso_alto(img, l.caja)
                 dif, energia = comparar_trazos(l.trazos, p, l.caja[3] - l.caja[1])
+                if dif >= SIGUE_IGUAL and l.duda is None:
+                    nueva = buscar_movida(img, l.caja, l.trazos, l.caja[3] - l.caja[1])
+                    if nueva is not None:
+                        # el mismo texto, en otro sitio: la traducción lo sigue (sin leer ni traducir)
+                        dx, dy = nueva[0] - l.caja[0], nueva[1] - l.caja[1]
+                        l.caja = tuple(int(v) for v in nueva)
+                        if l.filas:
+                            l.filas = [(t, (c[0] + dx, c[1] + dy, c[2] + dx, c[3] + dy)) for t, c in l.filas]
+                        fijar(l, img)
+                        self.repintar = True
+                        self._evento("movida", [l])
+                        continue
+                    if ahora_t - self._escena_nueva < 0.6:
+                        cambiadas.append(l)              # cambió la pantalla entera: fuera ya
+                        continue
                 if dif < SIGUE_IGUAL:
                     l.duda = None
                     # igual por dentro; ¿apareció algo justo a su derecha o debajo (la frase sigue)?

@@ -19,6 +19,8 @@ FRASES = ["Welcome to the village, traveler.", "Do you want to save your progres
           "Press any key to continue", "Level 12 reached!", "Thank you, come again!", "Deadline: 2026-12-31 12:00",
           "You obtained a Silver Key.", "Are you sure? Yes / No", "Chapter 3 - The Forest", "Attack Defense Magic Items",
           "She looked at me and smiled.", "The lanterns still glow the same way.", "Time left 04:59"]
+FRASES_ZH = ["原来如此，这个故事在你们这一侧的世界叫做这个名字啊", "我不太喜欢竞争关系", "已领取", "篝火城间自由客运许可获得",
+             "推荐等级：25", "前往自由港七号", "低买高卖", "今日收益 60,133", "确定要退出吗？", "战斗胜利"]
 FRASES_JA = ["魔法の剣を手に入れた！", "とても有名です。", "締切：2026-12-31 12:00", "「森の外」特別募集協定",
              "ここはどこですか？", "セーブしますか？", "レベルが上がった！", "残り時間 04:59"]
 
@@ -62,17 +64,21 @@ def fuentes():
                                        ("gothic", "mincho", "meiryo", "yugoth", "yumin", "msyh", "simsun",
                                         "cjk", "ipag", "jp", "dotgothic", "zenmaru", "unifont"))
                and _sirve(f, _JA_MUESTRA)]
-        _FUENTES = (lat, cjk)
+        zh = [f for f in rutas if any(k in os.path.basename(f).lower() for k in
+                                      ("msyh", "simsun", "simhei", "deng", "cjk", "yahei", "kaiu", "msjh", "unifont"))
+              and _sirve(f, _ZH_MUESTRA)]
+        _FUENTES = (lat, cjk, zh)
     return _FUENTES
 
 
 _LAT_MUESTRA = "AaBbeRgk12!?"
 _JA_MUESTRA = "魔法剣入有名締切森外特別募集協定こはどセブレベル残時間！？"
+_ZH_MUESTRA = "原来如此这个故事在你们一侧的世界叫做名字啊我不太喜欢竞争关系已领取篝火城间自由客运许可获得"
 
 
-def _fuente(r, cjk, px):
-    lat, cjk_l = fuentes()
-    lista = (cjk_l or lat) if cjk else lat
+def _fuente(r, cjk, px, chino=False):
+    lat, cjk_l, zh_l = fuentes()
+    lista = ((zh_l or cjk_l or lat) if chino else (cjk_l or lat)) if cjk else lat
     for _ in range(10):
         try:
             return ImageFont.truetype(r.choice(lista), px)
@@ -102,7 +108,7 @@ def _cambiar(r, t):
             else:
                 otra = r.choice([x for x in "あいうえおかきくけこ" if x != c])
             return t[:i] + otra + t[i + 1:], "letra"
-    pool = FRASES_JA if not t.isascii() else FRASES
+    pool = (FRASES_ZH if t in FRASES_ZH else FRASES_JA) if not t.isascii() else FRASES
     return r.choice([f for f in pool if f != t]), "frase"
 
 
@@ -113,6 +119,22 @@ def _fondo(r, W, H, tipo, var):
         a = np.array([r.randrange(256) for _ in range(3)], float); b = np.array([r.randrange(256) for _ in range(3)], float)
         x = np.linspace(0, 1, W)[None, :, None]
         return Image.fromarray(np.broadcast_to(a * (1 - x) + b * x, (H, W, 3)).astype(np.uint8))
+    if tipo == "banner":
+        # anuncio o pantalla animada detrás del texto: colores fuertes, formas y letras que se mueven
+        rr = random.Random(r.random())
+        im = Image.new("RGB", (W, H), tuple(rr.randrange(0, 256) for _ in range(3)))
+        d = ImageDraw.Draw(im)
+        for k in range(10):
+            x0 = (rr.randrange(-60, W) + var * rr.randrange(-8, 9)) % (W + 60) - 60
+            y0 = rr.randrange(-20, H)
+            d.rectangle((x0, y0, x0 + rr.randrange(20, 120), y0 + rr.randrange(8, 50)), fill=tuple(rr.randrange(256) for _ in range(3)))
+        try:
+            ff = ImageFont.truetype(fuentes()[0][rr.randrange(len(fuentes()[0]))], rr.choice([18, 26, 40]))
+            d.text(((var * 6) % W - 40, rr.randrange(H)), rr.choice(["SALE", "GAME", "EVENT", "NEW", "SSR"]),
+                   font=ff, fill=tuple(rr.randrange(256) for _ in range(3)))
+        except Exception:
+            pass
+        return im.filter(ImageFilter.GaussianBlur(rr.choice([0, 1, 2])))
     # manchas que se mueven (var = fotograma)
     rr = random.Random(r.random())
     im = Image.new("RGB", (W, H), tuple(rr.randrange(0, 80) for _ in range(3)))
@@ -136,12 +158,14 @@ def secuencia(semilla, k=5):
     flecha y el cursor parpadean (cada 0,5 s). Un cambio de texto se mantiene en todos."""
     import math
     r = random.Random(semilla)
-    cjk = r.random() < 0.3 and bool(fuentes()[1])
-    texto = r.choice(FRASES_JA if cjk else FRASES)
-    px = r.choice([12, 14, 16, 18, 20, 24, 28, 34, 40])
-    f = _fuente(r, cjk, px)
+    cjk = r.random() < 0.35 and bool(fuentes()[1])
+    chino = cjk and r.random() < 0.5 and bool(fuentes()[2])
+    texto = r.choice(FRASES_ZH if chino else FRASES_JA if cjk else FRASES)
+    px = r.choice([11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 34, 40])
+    f = _fuente(r, cjk, px, chino)
     W = int(f.getlength(texto)) + 120; H = px * 3 + 40
-    fondo = r.choice(["liso", "liso", "degradado", "animado"])
+    fondo = r.choice(["liso", "liso", "degradado", "animado", "banner"])
+    estilo_txt = r.choice(["plano", "plano", "contorno", "sombra", "halo"])
     caja_cuadro = r.random() < 0.6
     opac = r.choice([90, 150, 200, 255])
     col_fondo_caja = tuple(r.randrange(0, 70) for _ in range(3))
@@ -150,7 +174,8 @@ def secuencia(semilla, k=5):
     x, y = 50, H // 2 - px // 2 - 4
     # qué pasa entre 'antes' y 'ahora'
     etiqueta = "cambio" if r.random() < 0.45 else "igual"
-    molestia = r.choice(["nada", "ruido", "fondo", "flecha", "flecha_dentro", "brillo", "cursor", "particula", "color"])
+    molestia = r.choice(["nada", "ruido", "fondo", "flecha", "flecha_dentro", "brillo", "cursor", "particula", "color",
+                         "personaje", "fondo"])
     texto2, detalle = (texto, molestia)
     if etiqueta == "cambio":
         texto2, detalle = _cambiar(r, texto)
@@ -162,7 +187,7 @@ def secuencia(semilla, k=5):
 
     def pintar(t, var, mol, n):
         rr = random.Random(semilla * 31 + n)
-        im = _fondo(random.Random(semilla), W, H, fondo, var if fondo == "animado" else 0).convert("RGBA")
+        im = _fondo(random.Random(semilla), W, H, fondo, var if fondo in ("animado", "banner") else 0).convert("RGBA")
         if caja_cuadro:
             capa = Image.new("RGBA", im.size, (0, 0, 0, 0))
             ImageDraw.Draw(capa).rounded_rectangle((20, 10, W - 20, H - 10), radius=8, fill=col_fondo_caja + (opac,))
@@ -175,8 +200,15 @@ def secuencia(semilla, k=5):
             fx = 1.0 + 0.14 * math.sin(n * 1.3 + fase * 6.3)
             c = tuple(max(0, min(255, int(v * fx))) for v in col)
         if t:
-            if contorno:
-                d.text((x, y), t, font=f, fill=c, stroke_width=2, stroke_fill=(0, 0, 0))
+            if estilo_txt == "sombra":
+                d.text((x + 2, y + 2), t, font=f, fill=(0, 0, 0))
+            if estilo_txt == "halo":
+                capa = Image.new("RGBA", im.size, (0, 0, 0, 0))
+                ImageDraw.Draw(capa).text((x, y), t, font=f, fill=(0, 0, 0, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                im.alpha_composite(capa.filter(ImageFilter.GaussianBlur(2)))
+                d = ImageDraw.Draw(im)
+            if contorno or estilo_txt == "contorno":
+                d.text((x, y), t, font=f, fill=c, stroke_width=1 if px < 16 else 2, stroke_fill=(0, 0, 0))
             else:
                 d.text((x, y), t, font=f, fill=c)
         fin = x + f.getlength(texto)
@@ -187,6 +219,11 @@ def secuencia(semilla, k=5):
             d.polygon([(fin - px * 0.6, y + px * 0.9), (fin, y + px * 0.9), (fin - px * 0.3, y + px * 1.3)], fill=(240, 240, 255))
         if mol == "cursor" and visible:
             d.rectangle((fin + 3, y, fin + 5, y + px), fill=c)
+        if mol == "personaje":
+            # un personaje que pasa por delante de parte del texto
+            cx = x - 40 + (n + 2) * (f.getlength(texto) + 80) / 12 + fase * 30
+            d.ellipse((cx - px, y - px * 0.6, cx + px, y + px * 1.8), fill=(int(220 * fase) + 30, 180, 160))
+            d.ellipse((cx - px * 0.6, y - px * 1.4, cx + px * 0.6, y - px * 0.2), fill=(250, 230, 200))
         if mol == "particula":
             for _ in range(3):
                 px_ = rr.randrange(x, int(fin)); py_ = rr.randrange(y, y + px)
@@ -198,7 +235,7 @@ def secuencia(semilla, k=5):
         return im
 
     antes = pintar(texto, var0, "nada", -1)
-    cuadros = [pintar(texto2, (var1 + 2 * n) if fondo == "animado" else var0, molestia, n) for n in range(k)]
+    cuadros = [pintar(texto2, (var1 + 2 * n) if fondo in ("animado", "banner") else var0, molestia, n) for n in range(k)]
     # la caja como la daría el lector: ajustada a la tinta, con algún píxel de margen
     bb = ImageDraw.Draw(Image.new("L", (W, H))).textbbox((x, y), texto, font=f)
     j = lambda: r.randint(-2, 2)
@@ -261,7 +298,7 @@ def medir(motor, n=300, inicio=50000, ejemplos=12):
                 final, como = "quitar", "se fue"; break
             if j in (3, 9):
                 t0 = time.perf_counter()
-                pista = None if t1.isascii() else "ja"
+                pista = "ja" if t1 in FRASES_JA else None
                 leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im.crop(cv), "auto", True, pista=pista))
                 if leido_ref is None:
                     leido_ref = leer(a)
@@ -372,11 +409,25 @@ def recolectar(motor, n=2500, inicio=100000, ruta="banco_datos.jsonl", k=10):
                         if dm < K:
                             resuelto = "mediana"; break
             d["resuelto"] = resuelto
+            # lectura como en vivo (pantalla grande: sin ampliar) y ampliando 3 veces, para decidir
+            # cómo leer la letra pequeña
+            pista0 = "ja" if t1 in FRASES_JA else None
+            lienzo = Image.new("RGB", (1400, max(200, a.height)), a.getpixel((2, 2)))
+            lienzo.paste(a, (0, 0))
+            d["rv"] = " ".join(p["t"] for p in motor.leer_parrafos(lienzo, "auto", True, pista=pista0))
+            cv0 = caja_lectura(caja, a)
+            rec = a.crop(cv0)
+            d["r3"] = " ".join(p["t"] for p in motor.leer_parrafos(
+                rec.resize((int(rec.width * 1.5), int(rec.height * 1.5)), Image.LANCZOS), "auto", True, pista=pista0))
+            d["r2"] = " ".join(p["t"] for p in motor.leer_parrafos(rec, "auto", True, pista=pista0))
+            crudo = getattr(getattr(motor, "lector", None), "ultimo_crudo", None) or {}
+            d["crudo"] = {c: [[l["t"], l["jp"]] for l in ls] for c, ls in crudo.items()}
+            d["chino"] = float(t1 in FRASES_ZH)
             if resuelto is None:
                 m3, m10 = mediana(cs[:3]), mediana(cs[-5:])
                 d.update(rasgos_imagen(pa, m3, caja, "m"))
                 d.update(rasgos_imagen(pa, m10, caja, "u"))
-                pista = None if t1.isascii() else "ja"
+                pista = "ja" if t1 in FRASES_JA else None
                 cv = caja_lectura(caja, a)
                 leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im.crop(cv), "auto", True, pista=pista))
                 d["ra"], d["rm"], d["ru"] = leer(a), leer(m3), leer(m10)

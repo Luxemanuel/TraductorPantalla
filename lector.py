@@ -53,6 +53,7 @@ def instalar_lectores_windows(idiomas=None):
 
 
 _LATINA = re.compile(r"[A-Za-z]")
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]")
 
 
 def parece_ingles(linea_ja, lineas_en):
@@ -69,6 +70,8 @@ def parece_ingles(linea_ja, lineas_en):
     te = " ".join(l["t"] for l in en)
     letras = _LATINA.findall(te)
     vocales = sum(c in "aeiouAEIOU" for c in letras) / max(1, len(letras))
+    if latinas_ja <= 0.07 and len(_CJK.findall(tj)) >= 4 and len(_CJK.findall(tj)) >= 0.7 * len(letras):
+        return False       # muchos caracteres CJK y la lectura inglesa es corta: texto CJK (p. ej. chino)
     return not (latinas_ja <= 0.07 and vocales <= 0.35)
 
 
@@ -246,12 +249,19 @@ class LectorWindows:
             cjk = [dict(l, idi="zh") for l in zh]
             cjk += [dict(j, idi="ja") for j in ja if proporcion_kana([j["t"]]) >= 0.15
                     and not any(_solapa(j, z) for z in zh)]
-        elif ja and kana < 0.02 and "zh" not in self.motores and sum(len(l["t"]) for l in ja) >= 8:
-            # parece chino pero Windows no tiene el lector chino: se traduce como chino y se avisa
-            self.falta_chino = True
-            cjk = [dict(l, idi="zh") for l in ja]
         else:
-            cjk = [dict(l, idi="ja") for l in ja]
+            # línea a línea: con kana es japonés; frases largas sin kana son chino (hay juegos que
+            # mezclan las dos cosas). Sin lector chino, la lectura japonesa de los hanzi sirve.
+            cjk = []
+            for l in ja:
+                largo = len(re.sub(r"\s", "", l["t"]))
+                if proporcion_kana([l["t"]]) < 0.02 and largo >= 8 and modo == "auto":
+                    if "zh" not in self.motores:
+                        self.falta_chino = True
+                    otra = [z for z in zh if _solapa(l, z)]
+                    cjk += [dict(z, idi="zh") for z in otra] if otra else [dict(l, idi="zh")]
+                else:
+                    cjk.append(dict(l, idi="ja"))
         if modo == "en":
             cjk = []
         latinas = [dict(l, idi="en") for l in lineas.get("en", []) if not any(_solapa(l, j) for j in cjk)]
