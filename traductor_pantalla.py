@@ -1918,7 +1918,8 @@ def autoprueba_banco(m, lineas):
                           f"{len(banco.fuentes()[1])} japonesas)")
     if os.environ.get("TRADUCTOR_BANCO_DATOS"):
         ruta = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "banco_datos.jsonl")
-        dur = banco.recolectar(m, n=int(os.environ["TRADUCTOR_BANCO_DATOS"]), ruta=ruta)
+        inicio = 200000 + (int(time.time()) // 60 % 100000) * 10      # casos nuevos en cada prueba
+        dur = banco.recolectar(m, n=int(os.environ["TRADUCTOR_BANCO_DATOS"]), ruta=ruta, inicio=inicio)
         lineas.append(f"Datos del banco recogidos en {dur:.0f} s: {ruta}")
     return desfase <= 0.03 and parpadeo <= 0.03
 
