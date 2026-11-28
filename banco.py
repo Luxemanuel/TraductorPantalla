@@ -125,7 +125,16 @@ def _fondo(r, W, H, tipo, var):
 
 
 def caso(semilla):
-    """Devuelve (img_antes, img_ahora, caja, etiqueta, detalle)."""
+    """(antes, ahora, caja, etiqueta, detalle, texto_antes, texto_ahora): un solo fotograma."""
+    antes, cuadros, caja, etq, det, t1, t2 = secuencia(semilla, 1)
+    return antes, cuadros[0], caja, etq, det, t1, t2
+
+
+def secuencia(semilla, k=5):
+    """Como caso(), pero con k fotogramas seguidos (cada 0,1 s) después del momento del cambio:
+    el fondo animado se mueve, el ruido y las partículas cambian en cada uno, el brillo late, la
+    flecha y el cursor parpadean (cada 0,5 s). Un cambio de texto se mantiene en todos."""
+    import math
     r = random.Random(semilla)
     cjk = r.random() < 0.3 and bool(fuentes()[1])
     texto = r.choice(FRASES_JA if cjk else FRASES)
@@ -137,8 +146,6 @@ def caso(semilla):
     opac = r.choice([90, 150, 200, 255])
     col_fondo_caja = tuple(r.randrange(0, 70) for _ in range(3))
     col = tuple(r.randrange(150, 256) for _ in range(3)) if r.random() < 0.8 else tuple(r.randrange(0, 90) for _ in range(3))
-    if caja_cuadro is False and fondo == "liso":
-        pass
     contorno = r.random() < 0.25
     x, y = 50, H // 2 - px // 2 - 4
     # qué pasa entre 'antes' y 'ahora'
@@ -149,9 +156,12 @@ def caso(semilla):
         texto2, detalle = _cambiar(r, texto)
         if r.random() < 0.15:
             texto2, detalle = "", "se va"
+        molestia = r.choice(["nada", "nada", "ruido", "fondo"])
     var0, var1 = r.randrange(100), r.randrange(100)
+    fase = r.random()
 
-    def pintar(t, var, mol):
+    def pintar(t, var, mol, n):
+        rr = random.Random(semilla * 31 + n)
         im = _fondo(random.Random(semilla), W, H, fondo, var if fondo == "animado" else 0).convert("RGBA")
         if caja_cuadro:
             capa = Image.new("RGBA", im.size, (0, 0, 0, 0))
@@ -162,37 +172,44 @@ def caso(semilla):
         if mol == "color":
             c = tuple(min(255, int(v * 0.8 + 60)) for v in col[::-1])
         if mol == "brillo":
-            c = tuple(min(255, int(v * 1.12)) for v in col)
+            fx = 1.0 + 0.14 * math.sin(n * 1.3 + fase * 6.3)
+            c = tuple(max(0, min(255, int(v * fx))) for v in col)
         if t:
             if contorno:
                 d.text((x, y), t, font=f, fill=c, stroke_width=2, stroke_fill=(0, 0, 0))
             else:
                 d.text((x, y), t, font=f, fill=c)
         fin = x + f.getlength(texto)
-        if mol == "flecha":
+        visible = ((n * 0.1 + fase) % 1.0) < 0.5 or n == 0
+        if mol == "flecha" and visible:
             d.polygon([(fin + 10, y + px * 0.5), (fin + 10 + px * 0.6, y + px * 0.5), (fin + 10 + px * 0.3, y + px)], fill=(240, 240, 255))
-        if mol == "flecha_dentro":
+        if mol == "flecha_dentro" and visible:
             d.polygon([(fin - px * 0.6, y + px * 0.9), (fin, y + px * 0.9), (fin - px * 0.3, y + px * 1.3)], fill=(240, 240, 255))
-        if mol == "cursor":
+        if mol == "cursor" and visible:
             d.rectangle((fin + 3, y, fin + 5, y + px), fill=c)
         if mol == "particula":
             for _ in range(3):
-                px_ = r.randrange(x, int(fin)); py_ = r.randrange(y, y + px)
+                px_ = rr.randrange(x, int(fin)); py_ = rr.randrange(y, y + px)
                 d.ellipse((px_ - 3, py_ - 3, px_ + 3, py_ + 3), fill=(255, 255, 200))
         im = im.convert("RGB")
         if mol == "ruido":
-            a = np.asarray(im).astype(np.int16) + np.random.default_rng(var).integers(-6, 7, (H, W, 3))
+            a = np.asarray(im).astype(np.int16) + np.random.default_rng(var * 7 + n).integers(-6, 7, (H, W, 3))
             im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
         return im
 
-    antes = pintar(texto, var0, "nada")
-    ahora = pintar(texto2, var1 if fondo == "animado" else var0,
-                   molestia if etiqueta == "igual" else r.choice(["nada", "nada", "ruido", "fondo"]))
+    antes = pintar(texto, var0, "nada", -1)
+    cuadros = [pintar(texto2, (var1 + 2 * n) if fondo == "animado" else var0, molestia, n) for n in range(k)]
     # la caja como la daría el lector: ajustada a la tinta, con algún píxel de margen
     bb = ImageDraw.Draw(Image.new("L", (W, H))).textbbox((x, y), texto, font=f)
     j = lambda: r.randint(-2, 2)
     caja = (bb[0] + j(), bb[1] + j(), bb[2] + j(), bb[3] + j())
-    return antes, ahora, caja, etiqueta, detalle, texto, texto2
+    return antes, cuadros, caja, etiqueta, detalle, texto, texto2
+
+
+def mediana(cuadros):
+    """El fotograma 'mediano' (píxel a píxel): lo pasajero (partículas, ruido, parpadeos cortos)
+    desaparece y lo que se queda (el texto) permanece."""
+    return Image.fromarray(np.median(np.stack([np.asarray(c) for c in cuadros]), axis=0).astype(np.uint8))
 
 
 def medir(motor, n=300, inicio=50000, ejemplos=12):
@@ -242,34 +259,65 @@ def medir(motor, n=300, inicio=50000, ejemplos=12):
     return "\n".join([texto] + malos[:ejemplos]), nd / max(1, tot["cambio"]), np_ / max(1, tot["igual"])
 
 
-def recolectar(motor, n=1500, inicio=60000, ruta="banco_datos.jsonl"):
-    """Datos para ajustar la comprobación leyendo: por cada caso, los rasgos de imagen y lo que
-    lee el lector real en dos recortes (justo y con más margen), antes y ahora. Una línea JSON
-    por caso en 'ruta'."""
+def trozos(p0, p1, alto):
+    """Diferencia de cada trozo del ancho de una letra (las mismas cuentas que
+    envivo.comparar_trazos): (difs, posiciones relativas 0..1)."""
+    if p0 is None or p1 is None or p0.shape != p1.shape:
+        return np.array([2.0]), np.array([0.5])
+    a2, b2, d2 = (p0 * p0).sum(axis=(0, 2)), (p1 * p1).sum(axis=(0, 2)), ((p0 - p1) ** 2).sum(axis=(0, 2))
+    n = p0.shape[0] * p0.shape[2]
+    W = len(a2)
+    w = max(5, int(alto * 0.45))
+    if W <= w:
+        return np.array([float(d2.sum()) / max(1e-3, float(a2.sum() + b2.sum()))]), np.array([0.5])
+    ca, cb, cd = (np.concatenate(([0.0], np.cumsum(v))) for v in (a2, b2, d2))
+    pos = np.array(list(range(0, W - w, max(2, w // 2))) + [W - w])
+    sa, sb, sd = ca[pos + w] - ca[pos], cb[pos + w] - cb[pos], cd[pos + w] - cd[pos]
+    ref = max(float(a2.sum()) / (n * W), float(b2.sum()) / (n * W), 1e-3)
+    t = np.maximum(sa, sb) / (n * w) >= 0.12 * ref
+    if not t.any():
+        return np.array([0.0]), np.array([0.5])
+    return sd[t] / (sa[t] + sb[t]), (pos[t] + w / 2) / W
+
+
+def recolectar(motor, n=2000, inicio=80000, ruta="banco_datos.jsonl", k=5):
+    """Datos para ajustar la comprobación: por cada caso, rasgos de imagen del primer fotograma
+    tras el cambio y de la mediana de k fotogramas, y lo que lee el lector real (recorte justo y
+    amplio) en la imagen de antes, en el primer fotograma y en la mediana."""
     import json
     import time
     import envivo
     t0 = time.time()
     salida = open(ruta, "w", encoding="utf-8")
-    print = lambda texto, flush=True: salida.write(texto + "\n")
     for i in range(inicio, inicio + n):
         try:
-            a, b, caja, etq, det, t1, t2 = caso(i)
+            a, cs, caja, etq, det, t1, t2 = secuencia(i, k)
             h = envivo.huella(a, caja)
             if h is None or h.sum() < envivo.MIN_TRAZOS:
                 continue
             alto = caja[3] - caja[1]
-            dif, en = envivo.comparar_trazos(envivo.paso_alto(a, caja), envivo.paso_alto(b, caja), alto)
-            pista = None if t1.isascii() else "ja"
-            leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
-            m2 = max(12, int(1.2 * alto))
-            c2 = (max(0, caja[0] - m2), max(0, caja[1] - m2), min(a.width, caja[2] + m2), min(a.height, caja[3] + m2))
-            c1 = envivo._caja_verif(caja, a)
-            d = dict(i=i, e=etq, d=det, t1=t1, t2=t2, dif=round(dif, 4), en=round(en, 4), alto=alto,
-                     a1=leer(a.crop(c1)), b1=leer(b.crop(c1)), a2=leer(a.crop(c2)), b2=leer(b.crop(c2)))
-            print("BANCO_JSON " + json.dumps(d, ensure_ascii=True), flush=True)
+            pa = envivo.paso_alto(a, caja)
+            m = mediana(cs)
+            d = dict(i=i, e=etq, d=det, t1=t1, t2=t2, alto=alto)
+            for nom, im in (("f", cs[0]), ("m", m)):
+                pb = envivo.paso_alto(im, caja)
+                dif, en = envivo.comparar_trazos(pa, pb, alto)
+                ds, ps = trozos(pa, pb, alto)
+                d[nom + "dif"], d[nom + "en"] = round(dif, 4), round(en, 4)
+                d[nom + "n"] = int((ds >= envivo.SIGUE_IGUAL).sum())
+                d[nom + "frac"] = round(float((ds >= envivo.SIGUE_IGUAL).mean()), 3)
+                d[nom + "pos"] = round(float(ps[int(np.argmax(ds))]), 3)
+                d[nom + "d2"] = round(float(np.sort(ds)[-2]) if len(ds) > 1 else 0.0, 4)
+            if d["fdif"] >= envivo.SIGUE_IGUAL and d["fen"] >= envivo.SE_FUE:
+                pista = None if t1.isascii() else "ja"
+                leer = lambda im: " ".join(p["t"] for p in motor.leer_parrafos(im, "auto", True, pista=pista))
+                m2 = max(12, int(1.2 * alto))
+                c2 = (max(0, caja[0] - m2), max(0, caja[1] - m2), min(a.width, caja[2] + m2), min(a.height, caja[3] + m2))
+                c1 = envivo._caja_verif(caja, a)
+                for nom, im in (("a", a), ("f", cs[0]), ("m", m)):
+                    d[nom + "1"], d[nom + "2"] = leer(im.crop(c1)), leer(im.crop(c2))
+            salida.write("BANCO_JSON " + json.dumps(d, ensure_ascii=True) + "\n")
         except Exception as e:
-            print("BANCO_JSON " + json.dumps({"i": i, "error": str(e)}), flush=True)
-    print(f"BANCO_JSON_FIN {time.time() - t0:.0f} s", flush=True)
+            salida.write("BANCO_JSON " + json.dumps({"i": i, "error": repr(e)}) + "\n")
     salida.close()
     return time.time() - t0
