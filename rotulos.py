@@ -15,7 +15,7 @@ FONDO = (18, 20, 26, 247)          # casi opaco: el original no se trasluce
 BORDE = (255, 255, 255, 28)
 TEXTO = (246, 246, 242, 255)
 RELLENO = 4                     # margen dentro del cuadro
-MIN_PX = 11
+MIN_PX = 10
 
 # letras de Windows para escrituras que la letra incluida no tiene
 _POR_IDIOMA = {
@@ -169,6 +169,8 @@ class Rotulador:
                                         self.idioma, max_ancho)
             im = dibujar(ls, px, estrecha, self.idioma, ancho + 2 * RELLENO, (y1 - y0) + 2 * RELLENO)
             x, y = x0 - RELLENO, y0 - RELLENO
+            if len(ls) == 1 and im.height > (y1 - y0) + 2 * RELLENO:
+                y = int(round((y0 + y1) / 2 - im.height / 2))   # una sola línea más alta: centrada
             x = max(0, min(x, W - im.width))
             y = max(0, min(y, H - im.height))
             piezas.append({"ids": (l.id,), "x": x, "y": y, "img": im,

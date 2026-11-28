@@ -167,9 +167,13 @@ class LectorWindows:
         solo un trozo de la pantalla: un renglón de puros kanji no se confunde con chino."""
         img = imagen.convert("RGBA")
         # El lector de Windows acierta más con letras de unos 20-40 px: ampliar zonas pequeñas
-        escala = 2 if max(img.size) <= 1300 else 1
+        # Ampliar antes de leer: con la letra pequeña de los juegos el lector la detecta mucho mejor
+        # (banco de pruebas: ×2 frente a tamaño real, inglés ≤13 px 0,56 → 0,64; chino 0,37 → 0,46).
+        # Pantallas de hasta 1400 px se leen ×2 y hasta 2000 px ×1,5.
+        lado = max(img.size)
+        escala = 2 if lado <= 1400 else (1.5 if lado <= 2000 else 1)
         if escala != 1:
-            img = img.resize((img.width * escala, img.height * escala))
+            img = img.resize((int(img.width * escala), int(img.height * escala)), Image.LANCZOS)
         lim = getattr(self, "max_dim", 10000) or 10000
         if max(img.size) > lim:
             f = lim / max(img.size)
